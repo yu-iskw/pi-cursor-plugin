@@ -159,7 +159,12 @@ export default function (pi: ExtensionAPI): void {
     const servers = syncMcp(ctx.cwd, ctx.isProjectTrusted());
     const text = [
       formatRuleMessage(
-        loadRules({ home, cwd: ctx.cwd, userRulesDir: userRulesDir() }),
+        loadRules({
+          home,
+          cwd: ctx.cwd,
+          userRulesDir: userRulesDir(),
+          projectTrusted: ctx.isProjectTrusted(),
+        }),
         loadCatalog(home).skills,
         [...pathsInText(prompt), ...touchedFiles],
       ),

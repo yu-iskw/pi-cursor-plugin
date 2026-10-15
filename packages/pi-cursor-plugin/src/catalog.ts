@@ -146,6 +146,7 @@ export function loadRules(input: {
   home?: string;
   cwd: string;
   userRulesDir: string;
+  projectTrusted?: boolean;
 }): RuleRecord[] {
   const home = input.home ?? storeRoot();
   const files = new Set<string>();
@@ -156,7 +157,9 @@ export function loadRules(input: {
     for (const file of componentPaths(root, entry.manifest, 'rules')) files.add(file);
   }
   for (const file of markdownFiles(input.userRulesDir)) files.add(file);
-  for (const file of markdownFiles(join(input.cwd, '.cursor', 'rules'))) files.add(file);
+  if (input.projectTrusted === true) {
+    for (const file of markdownFiles(join(input.cwd, '.cursor', 'rules'))) files.add(file);
+  }
   return [...files].sort().map(ruleRecord);
 }
 
@@ -207,7 +210,55 @@ function matchParts(parts: readonly string[], segments: readonly string[]): bool
 
 export function globMatches(glob: string, filePath: string): boolean {
   const normalized = filePath.replaceAll('\\', '/').replace(/^\.\//, '');
-  return matchParts(glob.replaceAll('\\', '/').split('/'), normalized.split('/'));
+  return expandBraces(glob.replaceAll('\\', '/')).some((pattern) =>
+    patternMatches(pattern, normalized),
+  );
+}
+
+function patternMatches(pattern: string, filePath: string): boolean {
+  if (!pattern.includes('/') && matchParts([pattern], [basename(filePath)])) return true;
+  return matchParts(pattern.split('/'), filePath.split('/'));
+}
+
+function expandBraces(pattern: string): string[] {
+  const start = pattern.indexOf('{');
+  const end = braceEnd(pattern, start);
+  if (start < 0 || end < 0) return [pattern];
+  const body = pattern.slice(start + 1, end);
+  if (!body.includes(',')) return [pattern];
+  const prefix = pattern.slice(0, start);
+  const suffix = pattern.slice(end + 1);
+  return splitBrace(body).flatMap((option) => expandBraces(`${prefix}${option}${suffix}`));
+}
+
+function braceEnd(pattern: string, start: number): number {
+  if (start < 0) return -1;
+  let depth = 0;
+  for (let index = start; index < pattern.length; index += 1) {
+    const char = pattern.charAt(index);
+    if (char === '{') depth += 1;
+    else if (char === '}') {
+      depth -= 1;
+      if (depth === 0) return index;
+    }
+  }
+  return -1;
+}
+
+function splitBrace(body: string): string[] {
+  const parts: string[] = [];
+  let depth = 0;
+  let current = '';
+  for (const char of body) {
+    if (char === '{') depth += 1;
+    else if (char === '}' && depth > 0) depth -= 1;
+    if (char === ',' && depth === 0) {
+      parts.push(current);
+      current = '';
+    } else current += char;
+  }
+  parts.push(current);
+  return parts;
 }
 
 function isPathChar(char: string): boolean {

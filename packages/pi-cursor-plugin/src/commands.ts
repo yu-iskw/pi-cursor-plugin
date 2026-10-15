@@ -122,7 +122,12 @@ function doctorPlugin(value: string, context: CommandContext): DispatchResult {
   const message = formatDoctor(
     name,
     loadCatalog(context.home),
-    loadRules({ home: context.home, cwd: context.cwd, userRulesDir: context.userRulesDir }),
+    loadRules({
+      home: context.home,
+      cwd: context.cwd,
+      userRulesDir: context.userRulesDir,
+      projectTrusted: context.projectTrusted === true,
+    }),
     cursorMcpServers({
       home: context.home,
       cwd: context.cwd,

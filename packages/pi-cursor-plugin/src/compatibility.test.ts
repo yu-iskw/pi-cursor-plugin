@@ -853,9 +853,20 @@ describe('pstack review follow-ups', () => {
         join(home, '.cursor', 'rules', 'types.mdc'),
         '---\ndescription: ts\nglobs: **/*.ts,**/*.tsx\n---\nUSE_EXACT_TYPES\n',
       );
-      const rules = loadRules({ home, cwd: home, userRulesDir: join(home, 'none') });
+      const hidden = loadRules({ home, cwd: home, userRulesDir: join(home, 'none') });
+      expect(formatRuleMessage(hidden, [], ['src/app.ts'])).not.toContain('USE_EXACT_TYPES');
+      const rules = loadRules({
+        home,
+        cwd: home,
+        userRulesDir: join(home, 'none'),
+        projectTrusted: true,
+      });
       expect(formatRuleMessage(rules, [], ['src/app.ts'])).toContain('USE_EXACT_TYPES');
       expect(formatRuleMessage(rules, [], ['README.md'])).not.toContain('USE_EXACT_TYPES');
+      expect(globMatches('*.ts', 'src/app.ts')).toBe(true);
+      expect(globMatches('*.ts', 'src/app.tsx')).toBe(false);
+      expect(globMatches('{src,lib}/**/*.ts', 'lib/app.ts')).toBe(true);
+      expect(globMatches('src/*.ts', 'src/nested/app.ts')).toBe(false);
     } finally {
       rmSync(home, { recursive: true, force: true });
     }
