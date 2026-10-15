@@ -11,6 +11,7 @@ import {
   toolPaths,
 } from './catalog.js';
 import { dispatchCursorPlugin } from './commands.js';
+import { formatTodoMessage, TODO_WIDGET } from './cursor-actions.js';
 import { storeRoot } from './manager.js';
 import {
   cursorMcpServers,
@@ -104,7 +105,7 @@ function registerSkillCommands(pi: ExtensionAPI, home: string): void {
 
 export default function (pi: ExtensionAPI): void {
   const home = storeRoot();
-  registerCursorTools(
+  const sessionTodos = registerCursorTools(
     pi,
     (message) => {
       pi.sendUserMessage(message, { deliverAs: 'followUp' });
@@ -149,6 +150,8 @@ export default function (pi: ExtensionAPI): void {
   syncMcp(process.cwd(), false);
   pi.on('session_start', (_event, ctx) => {
     touchedFiles.clear();
+    sessionTodos.reset();
+    if (ctx.hasUI) ctx.ui.setWidget(TODO_WIDGET, undefined);
     syncMcp(ctx.cwd, ctx.isProjectTrusted());
     publishLiveSession(ctx, '');
   });
@@ -173,6 +176,7 @@ export default function (pi: ExtensionAPI): void {
         cwd: ctx.cwd,
         sessionId: session.id,
       }),
+      formatTodoMessage(sessionTodos.current()),
     ]
       .filter((section) => section.trim().length > 0)
       .join('\n\n');

@@ -40,6 +40,13 @@ export function formatTodos(todos: readonly TodoItem[]): string {
     .join('\n');
 }
 
+export const TODO_WIDGET = 'pi-cursor-plugin-todos';
+
+export function formatTodoMessage(todos: readonly TodoItem[]): string {
+  if (todos.length === 0) return '';
+  return `# Session todos\n\n${formatTodos(todos)}`;
+}
+
 interface AskOption {
   id?: string;
   label: string;

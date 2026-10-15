@@ -34,6 +34,7 @@ import { dispatchCursorPlugin } from './commands.js';
 import {
   applyTodos,
   formatAskWithoutUi,
+  formatTodoMessage,
   formatTodos,
   normalizeQuestions,
 } from './cursor-actions.js';
@@ -1044,7 +1045,64 @@ describe('pstack review follow-ups', () => {
     expect(formatted).toContain('Setup: Which budget?');
     expect(formatted).toContain('large — xhigh reasoning');
   });
+
+  it('keeps the TodoWrite list for later turns', async () => {
+    expect(formatTodoMessage([])).toBe('');
+    const home = mkdtempSync(join(tmpdir(), 'pstack-todos-'));
+    try {
+      const tools = new Map<string, TodoTool>();
+      const pi = {
+        registerTool(tool: TodoTool) {
+          tools.set(tool.name, tool);
+        },
+      };
+      const session = registerCursorTools(pi as unknown as ExtensionAPI, () => {}, home);
+      const todo = tools.get('TodoWrite');
+      if (!todo) throw new Error('TodoWrite was not registered');
+      const shown: Array<string[] | undefined> = [];
+      const ctx = {
+        hasUI: true,
+        ui: {
+          setWidget(_key: string, content: string[] | undefined) {
+            shown.push(content);
+          },
+        },
+      } as ExtensionToolContext;
+      const written = await todo.execute(
+        'todo-1',
+        {
+          merge: false,
+          todos: [{ id: 'playbook', content: 'copy the steps', status: 'pending' }],
+        },
+        undefined,
+        undefined,
+        ctx,
+      );
+      expect(written.content[0]?.text).toContain('[ ] playbook: copy the steps');
+      expect(formatTodoMessage(session.current())).toContain('# Session todos');
+      expect(formatTodoMessage(session.current())).toContain('copy the steps');
+      expect(shown[0]?.join('\n')).toContain('copy the steps');
+      session.reset();
+      expect(formatTodoMessage(session.current())).toBe('');
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
 });
+
+interface TodoTool {
+  name: string;
+  execute: (
+    toolCallId: string,
+    params: {
+      merge: boolean;
+      todos: { id: string; content: string; status: 'pending' }[];
+    },
+    signal: undefined,
+    onUpdate: undefined,
+    ctx: ExtensionToolContext,
+  ) => Promise<{ content: { text?: string }[] }>;
+}
 
 interface RegisteredTool {
   name: string;

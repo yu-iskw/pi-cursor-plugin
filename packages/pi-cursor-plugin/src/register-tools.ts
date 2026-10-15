@@ -11,6 +11,7 @@ import {
   formatAskWithoutUi,
   formatTodos,
   normalizeQuestions,
+  TODO_WIDGET,
 } from './cursor-actions.js';
 import { storeRoot } from './manager.js';
 import {
@@ -105,7 +106,7 @@ export function registerCursorTools(
   pi: ExtensionAPI,
   deliver: (message: string) => void,
   home = storeRoot(),
-): void {
+): { current(): readonly TodoItem[]; reset(): void } {
   const board = createTaskBoard();
   let todos: TodoItem[] = [];
 
@@ -211,16 +212,28 @@ export function registerCursorTools(
         }),
       ),
     }),
-    execute(_toolCallId, params, _signal, _onUpdate, _ctx): Promise<AgentToolResult<ToolDetails>> {
+    execute(_toolCallId, params, _signal, _onUpdate, ctx): Promise<AgentToolResult<ToolDetails>> {
       const incoming: TodoItem[] = params.todos.map((todo) => ({
         id: todo.id,
         content: todo.content,
         status: todo.status,
       }));
       todos = applyTodos(todos, { merge: params.merge, todos: incoming });
+      showTodos(ctx, todos);
       return Promise.resolve(textResult(formatTodos(todos), { kind: 'todos' }));
     },
   });
+  return {
+    current: () => todos,
+    reset: () => {
+      todos = [];
+    },
+  };
+}
+
+function showTodos(ctx: ExtensionToolContext, todos: readonly TodoItem[]): void {
+  if (!ctx.hasUI) return;
+  ctx.ui.setWidget(TODO_WIDGET, todos.length === 0 ? undefined : formatTodos(todos).split('\n'));
 }
 
 interface TaskRuntime {
