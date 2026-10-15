@@ -46,6 +46,8 @@ interface TaskRequest {
   environment?: string;
   cloudBaseBranch?: string;
   parentModel?: string;
+  parentTranscripts?: string;
+  parentSessionId?: string;
 }
 
 export interface SubagentLaunch {
@@ -267,6 +269,15 @@ function resumeError(request: TaskRequest): string | undefined {
   return undefined;
 }
 
+function launchEnv(request: TaskRequest, depth: number): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...process.env, PI_CURSOR_TASK_DEPTH: String(depth) };
+  if (request.parentTranscripts && request.parentSessionId) {
+    env.PI_CURSOR_PARENT_TRANSCRIPTS = request.parentTranscripts;
+    env.PI_CURSOR_PARENT_SESSION = request.parentSessionId;
+  }
+  return env;
+}
+
 function launchArgs(request: TaskRequest): string[] {
   const args = ['--print', '--session-id', request.sessionId, '--session-dir', request.sessionDir];
   const requested = request.model?.trim();
@@ -303,7 +314,7 @@ export function planTask(
         ? request.prompt
         : formatSubagentPrompt(request, resolved.record, skills),
       cwd: request.cwd,
-      env: { ...process.env, PI_CURSOR_TASK_DEPTH: String(depth) },
+      env: launchEnv(request, depth),
     },
   };
 }

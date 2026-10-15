@@ -59,6 +59,11 @@ import {
   shouldBackground,
   suggestModels,
 } from './subagent.js';
+import {
+  formatWorkspaceContext,
+  projectSlug,
+  publishCursorTranscript,
+} from './workspace-context.js';
 import { claimWriter, createTaskWorktree, releaseWriter, rememberCheckout } from './worktree.js';
 
 import type { InstalledPlugin } from './manager.js';
@@ -916,6 +921,95 @@ describe('pstack review follow-ups', () => {
     } finally {
       if (previousDepth === undefined) delete process.env.PI_CURSOR_TASK_DEPTH;
       else process.env.PI_CURSOR_TASK_DEPTH = previousDepth;
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('publishes a Cursor transcript the pstack skills can read', () => {
+    const home = mkdtempSync(join(tmpdir(), 'pstack-transcripts-'));
+    try {
+      expect(projectSlug('/Users/you/proj')).toBe('Users-you-proj');
+      expect(projectSlug('/workspace')).toBe('workspace');
+      const transcripts = join(home, '.cursor', 'projects', 'Users-you-proj', 'agent-transcripts');
+      const context = formatWorkspaceContext({
+        cwd: '/Users/you/proj',
+        sessionId: 'task-live01',
+        homeDir: home,
+      });
+      expect(context).toContain(`Agent transcripts for this workspace live in ${transcripts}.`);
+      expect(context).toContain(
+        `The current agent's store is ${join(home, '.cursor', 'projects', 'Users-you-proj')}.`,
+      );
+      expect(context).toContain(join(transcripts, 'task-live01', 'task-live01.jsonl'));
+      const session = join(home, 'session.jsonl');
+      writeFileSync(
+        session,
+        [
+          JSON.stringify({ type: 'session', version: 3, id: 'task-live01' }),
+          JSON.stringify({
+            type: 'message',
+            message: { role: 'user', content: 'why is this here' },
+          }),
+          JSON.stringify({
+            type: 'message',
+            message: {
+              role: 'assistant',
+              content: [{ type: 'toolCall', name: 'read', arguments: { path: 'src/app.ts' } }],
+            },
+          }),
+          JSON.stringify({
+            type: 'message',
+            message: { role: 'system', content: 'hidden prompt' },
+          }),
+        ].join('\n'),
+      );
+      const written = publishCursorTranscript({
+        cwd: '/Users/you/proj',
+        sessionId: 'task-live01',
+        sessionFile: session,
+        prompt: 'why is this here',
+        homeDir: home,
+        parentTranscripts: transcripts,
+        parentSessionId: 'parent-session1',
+      });
+      expect(written).toBe(join(transcripts, 'task-live01', 'task-live01.jsonl'));
+      const body = readFileSync(written ?? '', 'utf8')
+        .trim()
+        .split('\n');
+      expect(body).toHaveLength(2);
+      const first = JSON.parse(body[0] ?? '{}') as {
+        message: { content: { text: string }[] };
+      };
+      expect(first.message.content[0]?.text).toBe('why is this here');
+      expect(body[1]).toContain('src/app.ts');
+      expect(body.join('\n')).not.toContain('hidden prompt');
+      expect(
+        readFileSync(
+          join(transcripts, 'parent-session1', 'subagents', 'task-live01.jsonl'),
+          'utf8',
+        ),
+      ).toContain('why is this here');
+      expect(
+        publishCursorTranscript({
+          cwd: '/Users/you/proj',
+          sessionId: '../etc',
+          sessionFile: session,
+          homeDir: home,
+        }),
+      ).toBeUndefined();
+      const plan = planTask(
+        {
+          ...blankRequest(home),
+          parentTranscripts: transcripts,
+          parentSessionId: 'parent-session1',
+        },
+        [],
+        [],
+      );
+      if (!('launch' in plan)) throw new Error(plan.error);
+      expect(plan.launch.env.PI_CURSOR_PARENT_TRANSCRIPTS).toBe(transcripts);
+      expect(plan.launch.env.PI_CURSOR_PARENT_SESSION).toBe('parent-session1');
+    } finally {
       rmSync(home, { recursive: true, force: true });
     }
   });

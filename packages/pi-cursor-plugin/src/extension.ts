@@ -2,7 +2,6 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 
 import {
-  appendSection,
   formatRuleMessage,
   replaceSection,
   loadCatalog,
@@ -20,6 +19,11 @@ import {
   writeMcpCatalog,
 } from './mcp-catalog.js';
 import { registerCursorTools } from './register-tools.js';
+import {
+  formatWorkspaceContext,
+  publishCursorTranscript,
+  sessionIdentity,
+} from './workspace-context.js';
 
 import type { CursorMcpServer } from './mcp-catalog.js';
 import type { ExtensionAPI, ExtensionCommandContext } from '@earendil-works/pi-coding-agent';
@@ -146,24 +150,46 @@ export default function (pi: ExtensionAPI): void {
   pi.on('session_start', (_event, ctx) => {
     touchedFiles.clear();
     syncMcp(ctx.cwd, ctx.isProjectTrusted());
+    publishLiveSession(ctx, '');
   });
   pi.on('before_agent_start', (event, ctx) => {
     const prompt = userPrompt(event);
+    const session = publishLiveSession(ctx, prompt);
     const readonlyDisabled = process.argv.includes('--no-mcp');
     const servers = syncMcp(ctx.cwd, ctx.isProjectTrusted());
-    const text = appendSection(
+    const text = [
       formatRuleMessage(
         loadRules({ home, cwd: ctx.cwd, userRulesDir: userRulesDir() }),
         loadCatalog(home).skills,
         [...pathsInText(prompt), ...touchedFiles],
       ),
       formatMcpMessage(mcpCatalogDir(home), servers, { readonlyDisabled }),
-    );
+      formatWorkspaceContext({
+        cwd: ctx.cwd,
+        sessionId: session.id,
+      }),
+    ]
+      .filter((section) => section.trim().length > 0)
+      .join('\n\n');
     event.systemPromptOptions.appendSystemPrompt = replaceSection(
       event.systemPromptOptions.appendSystemPrompt,
       text,
     );
   });
+}
+
+function publishLiveSession(ctx: { cwd: string }, prompt: string): { id?: string } {
+  const session = sessionIdentity(ctx);
+  if (!session.id) return {};
+  publishCursorTranscript({
+    cwd: ctx.cwd,
+    sessionId: session.id,
+    sessionFile: session.file,
+    prompt,
+    parentTranscripts: process.env.PI_CURSOR_PARENT_TRANSCRIPTS,
+    parentSessionId: process.env.PI_CURSOR_PARENT_SESSION,
+  });
+  return { id: session.id };
 }
 
 function registerServer(

@@ -16,6 +16,7 @@ import { storeRoot } from './manager.js';
 import {
   boundOutput,
   currentTaskDepth,
+  findSession,
   formatSubagentPrompt,
   listInstalledModels,
   modelRejection,
@@ -24,8 +25,14 @@ import {
   runSubagent,
   shouldBackground,
   taskGate,
+  validSessionId,
 } from './subagent.js';
 import { createTaskBoard } from './task-board.js';
+import {
+  agentTranscriptsDir,
+  publishCursorTranscript,
+  sessionIdentity,
+} from './workspace-context.js';
 import { rememberCheckout, reserveCheckout, taskCwd } from './worktree.js';
 
 import type { AskQuestion, TodoItem } from './cursor-actions.js';
@@ -290,6 +297,7 @@ async function executeTask(
     });
   }
   const sessionDir = join(runtime.home, 'tasks', 'sessions');
+  const parent = parentTranscript(ctx);
   const reserved = reserveCheckout({
     parent: ctx.cwd,
     sessionDir,
@@ -305,6 +313,8 @@ async function executeTask(
       sessionDir,
       stayInParent: reserved.stayInParent,
       release: reserved.release,
+      parentTranscripts: parent.transcripts,
+      parentSessionId: parent.sessionId,
     });
     handedOff = outcome.background;
     return outcome.result;
@@ -320,6 +330,17 @@ interface LocalRun {
   sessionDir: string;
   stayInParent: boolean;
   release: () => void;
+  parentTranscripts?: string;
+  parentSessionId?: string;
+}
+
+function parentTranscript(ctx: ExtensionToolContext): {
+  transcripts?: string;
+  sessionId?: string;
+} {
+  const id = sessionIdentity(ctx).id;
+  if (!id || !validSessionId(id)) return {};
+  return { transcripts: agentTranscriptsDir(ctx.cwd), sessionId: id };
 }
 
 async function runLocalTask(
@@ -356,6 +377,8 @@ async function runLocalTask(
       environment: params.environment,
       cloudBaseBranch: params.cloud_base_branch,
       parentModel: local.parentModel,
+      parentTranscripts: local.parentTranscripts,
+      parentSessionId: local.parentSessionId,
     },
     local.catalog.agents,
     local.catalog.skills,
@@ -461,6 +484,22 @@ async function runCloud(input: {
   );
 }
 
+function mirrorTaskSession(id: string, launch: SubagentLaunch): void {
+  const sessionDir = argValue(launch.args, '--session-dir');
+  publishCursorTranscript({
+    cwd: launch.cwd,
+    sessionId: id,
+    sessionFile: sessionDir ? findSession(sessionDir, id) : undefined,
+    parentTranscripts: launch.env.PI_CURSOR_PARENT_TRANSCRIPTS,
+    parentSessionId: launch.env.PI_CURSOR_PARENT_SESSION,
+  });
+}
+
+function argValue(args: readonly string[], flag: string): string | undefined {
+  const index = args.indexOf(flag);
+  return index >= 0 ? args.at(index + 1) : undefined;
+}
+
 function startBackground(
   id: string,
   description: string,
@@ -472,6 +511,7 @@ function startBackground(
   runtime.board.put(record);
   void runSubagent(launch)
     .then((result) => {
+      mirrorTaskSession(id, launch);
       const logPath = writeLog(runtime.home, id, `${result.stdout}\n${result.stderr}`);
       const rendered = resultText(result, logPath);
       const status = rendered.failed ? 'error' : 'done';
@@ -500,6 +540,7 @@ async function finishTask(input: {
 }): Promise<AgentToolResult<ToolDetails>> {
   try {
     const result = await runSubagent(input.launch, input.signal);
+    mirrorTaskSession(input.id, input.launch);
     const logPath = writeLog(input.home, input.id, `${result.stdout}\n${result.stderr}`);
     const rendered = resultText(result, logPath);
     return textResult(
