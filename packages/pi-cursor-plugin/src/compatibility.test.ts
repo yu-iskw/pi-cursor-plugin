@@ -801,7 +801,8 @@ describe('pstack compatibility', () => {
         env: { TOKEN: 'secret' },
         cwd: home,
       });
-      const directory = mcpCatalogDir(home);
+      const directory = mcpCatalogDir(home, home);
+      expect(directory).toBe(join(home, '.cursor', 'projects', projectSlug(home), 'mcps'));
       writeMcpCatalog(directory, servers);
       expect(readFileSync(join(directory, 'notion', 'INSTRUCTIONS.md'), 'utf8')).toContain(
         'Long-form documents',
@@ -814,6 +815,7 @@ describe('pstack compatibility', () => {
       const listed = formatMcpMessage(directory, servers);
       expect(listed).toContain(directory);
       expect(listed).toContain('Project chat override');
+      expect(formatMcpMessage(directory, [])).toContain(directory);
       expect(formatMcpMessage(directory, [])).toContain('gap');
       const disabled = formatMcpMessage(directory, [], { readonlyDisabled: true });
       expect(disabled).toContain('readonly');

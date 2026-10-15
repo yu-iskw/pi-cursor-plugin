@@ -3,6 +3,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 
 import { loadRegistry, safeJoin } from './manager.js';
+import { projectSlug } from './workspace-context.js';
 
 export interface CursorMcpServer {
   name: string;
@@ -14,8 +15,8 @@ export interface CursorMcpServer {
 
 const SERVER_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
-export function mcpCatalogDir(home: string): string {
-  return join(home, 'mcps');
+export function mcpCatalogDir(cwd: string, homeDir = homedir()): string {
+  return join(homeDir, '.cursor', 'projects', projectSlug(cwd), 'mcps');
 }
 
 export function cursorMcpServers(input: {
@@ -76,6 +77,7 @@ export function formatMcpMessage(
       MCP_HEADING,
       '',
       'No Cursor MCP servers are configured.',
+      `Inspect \`${directory}\` to confirm.`,
       '/why and /reflect should record each missing evidence category as a gap.',
     ].join('\n');
   }

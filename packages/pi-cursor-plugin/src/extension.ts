@@ -144,7 +144,7 @@ export default function (pi: ExtensionAPI): void {
     if (process.argv.includes('--no-mcp')) return [];
     const servers = cursorMcpServers({ home, cwd, projectTrusted });
     const connected = servers.filter((server) => registerServer(pi, server, registeredMcp));
-    writeMcpCatalog(mcpCatalogDir(home), connected);
+    writeMcpCatalog(mcpCatalogDir(cwd), connected);
     return connected;
   };
   syncMcp(process.cwd(), false);
@@ -171,7 +171,7 @@ export default function (pi: ExtensionAPI): void {
         loadCatalog(home).skills,
         [...pathsInText(prompt), ...touchedFiles],
       ),
-      formatMcpMessage(mcpCatalogDir(home), servers, { readonlyDisabled }),
+      formatMcpMessage(mcpCatalogDir(ctx.cwd), servers, { readonlyDisabled }),
       formatWorkspaceContext({
         cwd: ctx.cwd,
         sessionId: session.id,
