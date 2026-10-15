@@ -1,4 +1,12 @@
-import { chmodSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  existsSync,
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -23,7 +31,13 @@ import {
   normalizeQuestions,
 } from './cursor-actions.js';
 import { parseFrontmatter } from './frontmatter.js';
-import { saveRegistry } from './manager.js';
+import { loadRegistry, saveRegistry } from './manager.js';
+import {
+  cursorMcpServers,
+  formatMcpMessage,
+  mcpCatalogDir,
+  writeMcpCatalog,
+} from './mcp-catalog.js';
 import { registerCursorTools } from './register-tools.js';
 import {
   findSession,
@@ -91,6 +105,33 @@ function writePstack(home: string): void {
     installedAt: '2026-10-15T00:00:00.000Z',
   };
   saveRegistry({ schemaVersion: 1, plugins: { pstack: entry }, marketplaces: {} }, home);
+}
+
+function writePluginMcp(
+  home: string,
+  name: string,
+  enabled: boolean,
+  mcpServers: Record<string, unknown>,
+): void {
+  const root = join(home, 'plugins', name);
+  mkdirSync(join(root, '.cursor-plugin'), { recursive: true });
+  writeFileSync(
+    join(root, '.cursor-plugin', 'plugin.json'),
+    JSON.stringify({ name, mcpServers: './mcp.json' }),
+  );
+  writeFileSync(join(root, 'mcp.json'), JSON.stringify({ mcpServers }));
+  const registry = loadRegistry(home);
+  registry.plugins[name] = {
+    name,
+    source: `github:example/${name}`,
+    sourcePath: name,
+    revision: 'abc123',
+    format: 'cursor',
+    manifest: { name, mcpServers: './mcp.json' },
+    enabled,
+    installedAt: '2026-10-15T00:00:00.000Z',
+  };
+  saveRegistry(registry, home);
 }
 
 describe('pstack compatibility', () => {
@@ -525,6 +566,91 @@ describe('pstack compatibility', () => {
       else process.env.CURSOR_API_KEY = previousKey;
       if (previousBin === undefined) delete process.env.PI_BIN;
       else process.env.PI_BIN = previousBin;
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('lists Cursor MCP servers for why and reflect', () => {
+    const home = mkdtempSync(join(tmpdir(), 'pstack-mcp-'));
+    try {
+      writePstack(home);
+      writePluginMcp(home, 'docs', true, {
+        notion: { url: 'https://mcp.example/notion', description: 'Long-form documents' },
+      });
+      writePluginMcp(home, 'off', false, {
+        sentry: { url: 'https://mcp.example/sentry', description: 'Error tracking' },
+      });
+      const userFile = join(home, 'user-mcp.json');
+      writeFileSync(
+        userFile,
+        JSON.stringify({
+          mcpServers: {
+            slack: {
+              url: 'https://mcp.slack.com/mcp',
+              description: 'Real-time team chat',
+              auth: { CLIENT_ID: 'cursor-only' },
+            },
+            google: { auth: { CLIENT_ID: 'x' } },
+            '../evil': { command: 'echo' },
+          },
+        }),
+      );
+      mkdirSync(join(home, '.cursor'), { recursive: true });
+      writeFileSync(
+        join(home, '.cursor', 'mcp.json'),
+        JSON.stringify({
+          mcpServers: {
+            local: {
+              command: 'echo',
+              args: ['hi'],
+              env: { TOKEN: 'secret' },
+              cwd: home,
+              description: 'Local notes',
+            },
+            slack: { url: 'https://project.example/slack', description: 'Project chat override' },
+          },
+        }),
+      );
+      const servers = cursorMcpServers({ home, cwd: home, userFile });
+      expect(servers.map((server) => server.name)).toEqual(['slack', 'local', 'notion']);
+      const slack = servers.find((server) => server.name === 'slack');
+      expect(slack?.config).toEqual({ url: 'https://project.example/slack' });
+      expect(JSON.stringify(slack?.config)).not.toContain('CLIENT_ID');
+      const local = servers.find((server) => server.name === 'local');
+      expect(local?.config).toEqual({
+        command: 'echo',
+        args: ['hi'],
+        env: { TOKEN: 'secret' },
+        cwd: home,
+      });
+      const directory = mcpCatalogDir(home);
+      writeMcpCatalog(directory, servers);
+      expect(readFileSync(join(directory, 'notion', 'INSTRUCTIONS.md'), 'utf8')).toContain(
+        'Long-form documents',
+      );
+      writeMcpCatalog(
+        directory,
+        servers.filter((server) => server.name !== 'slack'),
+      );
+      expect(existsSync(join(directory, 'slack'))).toBe(false);
+      const listed = formatMcpMessage(directory, servers);
+      expect(listed).toContain(directory);
+      expect(listed).toContain('Project chat override');
+      expect(formatMcpMessage(directory, [])).toContain('gap');
+      const disabled = formatMcpMessage(directory, [], { readonlyDisabled: true });
+      expect(disabled).toContain('readonly');
+      expect(disabled).not.toContain('gap');
+      expect(disabled).not.toContain('No Cursor MCP servers are configured');
+      const doctor = dispatchCursorPlugin('doctor pstack', {
+        home,
+        cwd: home,
+        userRulesDir: join(home, 'empty-rules'),
+      });
+      expect(doctor.message).toContain('mcp: ');
+      expect(doctor.message).toContain('local');
+      expect(doctor.message).toContain('notion');
+      expect(doctor.message).not.toContain('sentry');
+    } finally {
       rmSync(home, { recursive: true, force: true });
     }
   });

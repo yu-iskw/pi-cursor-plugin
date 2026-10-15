@@ -350,7 +350,12 @@ const PSTACK_COMMANDS = [
 
 const PSTACK_AGENTS = ['poteto-agent', 'comment-sicko'] as const;
 
-export function formatDoctor(pluginName: string, catalog: Catalog, rules: RuleRecord[]): string {
+export function formatDoctor(
+  pluginName: string,
+  catalog: Catalog,
+  rules: RuleRecord[],
+  mcpNames: readonly string[] = [],
+): string {
   const skills = catalog.skills.filter((skill) => skill.plugin === pluginName);
   const agents = catalog.agents.filter((agent) => agent.plugin === pluginName);
   const renamed = skills
@@ -365,7 +370,7 @@ export function formatDoctor(pluginName: string, catalog: Catalog, rules: RuleRe
     'AskQuestion tool: single or multiple questions, with allow_multiple',
     'TodoWrite tool: available for the session todo list',
     'hooks: not executed',
-    'mcp: not started',
+    mcpNames.length > 0 ? `mcp: ${mcpNames.join(', ')}` : 'mcp: none configured',
   ];
   if (renamed.length > 0) lines.push(`display names: ${renamed.join('; ')}`);
   if (pluginName === 'pstack') {

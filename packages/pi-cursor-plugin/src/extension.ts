@@ -12,8 +12,15 @@ import {
 } from './catalog.js';
 import { dispatchCursorPlugin } from './commands.js';
 import { storeRoot } from './manager.js';
+import {
+  cursorMcpServers,
+  formatMcpMessage,
+  mcpCatalogDir,
+  writeMcpCatalog,
+} from './mcp-catalog.js';
 import { registerCursorTools } from './register-tools.js';
 
+import type { CursorMcpServer } from './mcp-catalog.js';
 import type { ExtensionAPI, ExtensionCommandContext } from '@earendil-works/pi-coding-agent';
 
 const PI_COMMANDS = [
@@ -125,16 +132,51 @@ export default function (pi: ExtensionAPI): void {
     const catalog = loadCatalog(home);
     return { skillPaths: catalog.skillPaths, promptPaths: catalog.promptPaths };
   });
+  const registeredMcp = new Set<string>();
+  const syncMcp = (cwd: string): CursorMcpServer[] => {
+    if (process.argv.includes('--no-mcp')) return [];
+    const servers = cursorMcpServers({ home, cwd });
+    const connected = servers.filter((server) => registerServer(pi, server, registeredMcp));
+    writeMcpCatalog(mcpCatalogDir(home), connected);
+    return connected;
+  };
+  syncMcp(process.cwd());
+  pi.on('session_start', (_event, ctx) => {
+    syncMcp(ctx.cwd);
+  });
   pi.on('before_agent_start', (event, ctx) => {
     const prompt = userPrompt(event);
-    const text = formatRuleMessage(
-      loadRules({ home, cwd: ctx.cwd, userRulesDir: userRulesDir() }),
-      loadCatalog(home).skills,
-      [...pathsInText(prompt), ...touchedFiles],
+    const readonlyDisabled = process.argv.includes('--no-mcp');
+    const servers = syncMcp(ctx.cwd);
+    const text = appendSection(
+      formatRuleMessage(
+        loadRules({ home, cwd: ctx.cwd, userRulesDir: userRulesDir() }),
+        loadCatalog(home).skills,
+        [...pathsInText(prompt), ...touchedFiles],
+      ),
+      formatMcpMessage(mcpCatalogDir(home), servers, { readonlyDisabled }),
     );
     event.systemPromptOptions.appendSystemPrompt = appendSection(
       event.systemPromptOptions.appendSystemPrompt,
       text,
     );
   });
+}
+
+function registerServer(
+  pi: ExtensionAPI,
+  server: CursorMcpServer,
+  registered: Set<string>,
+): boolean {
+  if (registered.has(server.name)) return true;
+  try {
+    pi.registerMcpServer(server.name, server.config);
+    registered.add(server.name);
+    return true;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (!message.toLowerCase().includes('already')) return false;
+    registered.add(server.name);
+    return true;
+  }
 }

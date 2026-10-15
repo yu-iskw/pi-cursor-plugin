@@ -10,6 +10,7 @@ import {
   setEnabled,
   uninstall,
 } from './manager.js';
+import { cursorMcpServers } from './mcp-catalog.js';
 
 import type { InstalledPlugin } from './manager.js';
 
@@ -121,6 +122,7 @@ function doctorPlugin(value: string, context: CommandContext): DispatchResult {
     name,
     loadCatalog(context.home),
     loadRules({ home: context.home, cwd: context.cwd, userRulesDir: context.userRulesDir }),
+    cursorMcpServers({ home: context.home, cwd: context.cwd }).map((server) => server.name),
   );
   return { message, reload: false };
 }

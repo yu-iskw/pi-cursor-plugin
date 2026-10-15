@@ -248,7 +248,8 @@ export function inspect(
   capabilities.push({
     name: 'mcp',
     available: false,
-    detail: 'Not started. pstack does not ship MCP servers.',
+    detail:
+      'pstack does not ship MCP servers. User servers from ~/.cursor/mcp.json, the project, and enabled plugins are registered for non-readonly agents.',
   });
   return { entry, capabilities };
 }
