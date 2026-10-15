@@ -1,10 +1,12 @@
 # Pi Cursor Plugin Manager
 
-A native Pi extension for installing and inspecting Cursor plugin packages without modifying upstream sources.
+A Pi extension that installs Cursor plugins and runs pstack with Pi's skill loader, slash commands, rules, and subagents.
 
 ## Status
 
-Experimental. Supports GitHub package installation, version pinning to an installed commit, registry, enable/disable, marketplace source aliases, and skill command registration. **Not** a complete implementation of Cursor's runtime. Hooks, MCP processes, rule activation, and Cursor-specific subagent orchestration are not executed.
+Targets Pi coding agent 1.2.0 (`@earendil-works/pi-coding-agent`). pstack skills keep their frontmatter and are available under the Cursor slash names (`/poteto-mode`, `/how`, `/setup-pstack`). `poteto-agent` and `comment-sicko` run through the `Task` tool. `poteto-agent` starts in the background, and `Task` `resume` continues its Pi session. `AskQuestion` and `TodoWrite` use those Cursor tool names. `alwaysApply` rules, including the file written by `/setup-pstack`, are added to the system prompt. A skill with `paths` is inlined when the prompt names a matching file.
+
+`Task` `environment: "cloud"` returns an error so the caller can respawn with `environment: "local"`. Readonly subagents pass `--no-mcp`. A non-readonly child keeps MCP servers configured for Pi. Hooks are not executed. pstack does not ship hooks or its own MCP servers.
 
 ## Install
 
@@ -13,6 +15,8 @@ pnpm install
 pnpm --filter @yu-iskw/pi-cursor-plugin build
 pi install ./packages/pi-cursor-plugin
 ```
+
+`pi` is `@earendil-works/pi-coding-agent@1.2.0`.
 
 ## Usage
 
@@ -24,17 +28,19 @@ pi install ./packages/pi-cursor-plugin
 /cursor-plugin list
 /cursor-plugin skills
 /cursor-plugin inspect pstack
-/cursor-plugin doctor thermos
+/cursor-plugin doctor pstack
 /cursor-plugin disable thermos
 /cursor-plugin enable thermos
 /cursor-plugin update pstack
 /cursor-plugin uninstall thermos
+/poteto-mode investigate the plugin loader
+/setup-pstack
 ```
 
-After installation, run `/reload` to register skill commands, for example `/cursor-pstack-skill-name task`.
+Install, update, enable, and disable reload Pi so new skills and slash commands are registered. `/poteto-mode` loads that skill the same way Pi loads `/skill:name`: the body is in a skill block and relative files resolve from the skill directory.
 
 ## Security and limitations
 
-Installing a package downloads source using git but does not run plugin-provided install scripts. Do not enable untrusted plugin instructions without reviewing them. No hooks or MCP servers are executed automatically. GitHub URLs are limited to public GitHub source. Marketplace aliases map to repository roots, not Cursor's hosted marketplace protocol. Relative components are discovered as read-only files. Cursor runtime parity is **not established**.
+Installing a package downloads source with git and does not run plugin install scripts or hooks. The `task` tool starts `pi --print` for a subagent and does not execute repository hooks. GitHub URLs are limited to public GitHub repositories. Marketplace aliases map to repository roots. Review plugin instructions before enabling them.
 
 Review the `AGENTS.md` instructions in this repository before developing changes. Run `pnpm test`, `pnpm build`, and `pnpm lint` for validation.
