@@ -22,6 +22,14 @@ export interface McpToolDescriptor {
   parameters?: unknown;
 }
 
+export interface McpResourceDescriptor {
+  server: string;
+  name: string;
+  uri: string;
+  description?: string;
+  mimeType?: string;
+}
+
 export function mcpToolDescriptor(tool: unknown): McpToolDescriptor | undefined {
   if (!tool || typeof tool !== 'object') return undefined;
   const rawName: unknown = Reflect.get(tool, 'name');
@@ -66,6 +74,7 @@ export function writeMcpCatalog(
   directory: string,
   servers: readonly CursorMcpServer[],
   tools: readonly McpToolDescriptor[] = [],
+  resources?: readonly McpResourceDescriptor[],
 ): void {
   mkdirSync(directory, { recursive: true, mode: 0o700 });
   const indexPath = join(directory, 'index.json');
@@ -86,6 +95,12 @@ export function writeMcpCatalog(
       dir,
       tools.filter((tool) => serverKey(tool.server) === serverKey(server.name)),
     );
+    if (resources) {
+      writeServerResources(
+        dir,
+        resources.filter((resource) => serverKey(resource.server) === serverKey(server.name)),
+      );
+    }
   }
   writeFileSync(indexPath, `${JSON.stringify(names, null, 2)}\n`);
 }
@@ -121,7 +136,7 @@ export function formatMcpMessage(
     MCP_HEADING,
     '',
     'These are the enabled MCP servers. A readonly Task passes --no-mcp and cannot call them.',
-    `Inspect \`${directory}\` for server metadata and each server's tools directory.`,
+    `Inspect \`${directory}\` for server metadata and each server's tools and resources directories.`,
     lines.join('\n'),
   ].join('\n');
 }
@@ -146,6 +161,43 @@ function writeServerTools(directory: string, tools: readonly McpToolDescriptor[]
   for (const entry of readdirSync(toolsDir)) {
     if (!keep.has(entry)) rmSync(join(toolsDir, entry));
   }
+}
+
+function writeServerResources(
+  directory: string,
+  resources: readonly McpResourceDescriptor[],
+): void {
+  const resourcesDir = join(directory, 'resources');
+  if (resources.length === 0) {
+    rmSync(resourcesDir, { recursive: true, force: true });
+    return;
+  }
+  mkdirSync(resourcesDir, { recursive: true });
+  const keep = new Set<string>();
+  for (const resource of resources) {
+    const file = resourceFileName(resource.name);
+    if (!file) continue;
+    keep.add(file);
+    writeFileSync(join(resourcesDir, file), resourceDescriptor(resource));
+  }
+  for (const entry of readdirSync(resourcesDir)) {
+    if (!keep.has(entry)) rmSync(join(resourcesDir, entry));
+  }
+}
+
+function resourceFileName(name: string): string | undefined {
+  const cleaned = name.replaceAll(/[^A-Za-z0-9._-]+/g, '_').replaceAll(/^_+|_+$/g, '');
+  return /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(cleaned) ? `${cleaned}.json` : undefined;
+}
+
+function resourceDescriptor(resource: McpResourceDescriptor): string {
+  const body: { uri: string; name: string; description?: string; mimeType?: string } = {
+    uri: resource.uri,
+    name: resource.name,
+  };
+  if (resource.description) body.description = resource.description;
+  if (resource.mimeType) body.mimeType = resource.mimeType;
+  return `${JSON.stringify(body, null, 2)}\n`;
 }
 
 function toolDescriptor(tool: McpToolDescriptor): string {

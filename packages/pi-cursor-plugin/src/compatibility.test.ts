@@ -49,6 +49,7 @@ import {
   mcpToolDescriptor,
   writeMcpCatalog,
 } from './mcp-catalog.js';
+import { listStdioResources } from './mcp-resources.js';
 import { registerCursorTools } from './register-tools.js';
 import {
   findSession,
@@ -1294,7 +1295,61 @@ describe('pstack review follow-ups', () => {
       rmSync(blocked, { recursive: true, force: true });
     }
   });
+
+  it('writes Cursor MCP resource descriptors for /why', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'pstack-mcp-resources-'));
+    try {
+      const script = join(home, 'notes-mcp.mjs');
+      writeFileSync(script, NOTES_MCP);
+      const server = {
+        name: 'notes',
+        description: 'Notes',
+        config: { command: process.execPath, args: [script] },
+      };
+      const resources = await listStdioResources(server);
+      expect(resources).toEqual([
+        {
+          server: 'notes',
+          uri: 'notes://decisions',
+          name: 'decisions',
+          description: 'Design notes',
+          mimeType: 'text/markdown',
+        },
+      ]);
+      const directory = mcpCatalogDir(home, home);
+      writeMcpCatalog(directory, [server], [], resources);
+      const file = join(directory, 'notes', 'resources', 'decisions.json');
+      const body = readFileSync(file, 'utf8');
+      expect(body).toContain('notes://decisions');
+      expect(body).toContain('Design notes');
+      writeMcpCatalog(directory, [server], [], []);
+      expect(existsSync(file)).toBe(false);
+      await expect(
+        listStdioResources({
+          name: 'remote',
+          description: 'Remote',
+          config: { url: 'https://example.test/mcp' },
+        }),
+      ).resolves.toEqual([]);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
 });
+
+const NOTES_MCP = `import readline from 'node:readline';
+const rl = readline.createInterface({ input: process.stdin });
+rl.on('line', (line) => {
+  if (!line.trim()) return;
+  const msg = JSON.parse(line);
+  const reply = (result) => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: msg.id, result }) + '\\n');
+  if (msg.method === 'initialize') reply({ protocolVersion: '2024-11-05', capabilities: { resources: {} }, serverInfo: { name: 'notes', version: '0.0.1' } });
+  if (msg.method === 'resources/list') reply({ resources: [
+    { uri: 'notes://decisions', name: 'decisions', description: 'Design notes', mimeType: 'text/markdown' },
+    { uri: 'ui://notes/panel', name: 'panel' },
+  ] });
+});
+`;
 
 interface TodoTool {
   name: string;

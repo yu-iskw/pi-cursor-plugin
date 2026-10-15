@@ -20,6 +20,7 @@ import {
   mcpToolDescriptor,
   writeMcpCatalog,
 } from './mcp-catalog.js';
+import { listedResources } from './mcp-resources.js';
 import { registerCursorTools } from './register-tools.js';
 import {
   formatWorkspaceContext,
@@ -161,6 +162,10 @@ export default function (pi: ExtensionAPI): void {
         if (generation === refreshGeneration) publishCatalog(cwd, projectTrusted);
       }, delay);
     }
+    void listedResources(connected).then((resources) => {
+      if (generation !== refreshGeneration) return;
+      writeMcpCatalog(mcpCatalogDir(cwd), connected, listedMcpTools(pi), resources);
+    });
     return connected;
   };
   syncMcp(process.cwd(), false);
