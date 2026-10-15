@@ -251,18 +251,20 @@ async function selectOptions(
   return selected;
 }
 
+interface TaskParams {
+  prompt: string;
+  description: string;
+  subagent_type: string;
+  model?: string;
+  readonly?: boolean;
+  run_in_background?: boolean;
+  resume?: string;
+  environment?: string;
+  cloud_base_branch?: string;
+}
+
 async function executeTask(
-  params: {
-    prompt: string;
-    description: string;
-    subagent_type: string;
-    model?: string;
-    readonly?: boolean;
-    run_in_background?: boolean;
-    resume?: string;
-    environment?: string;
-    cloud_base_branch?: string;
-  },
+  params: TaskParams,
   signal: AbortSignal | undefined,
   ctx: ExtensionToolContext,
   runtime: TaskRuntime,
@@ -279,28 +281,23 @@ async function executeTask(
   if (wantsCloud(params.environment, params.cloud_base_branch, resume)) {
     return runCloud(params, catalog.agents, ctx.cwd, ctx.model?.id, runtime);
   }
-  const sessionDir = join(runtime.home, 'tasks', 'sessions');
   const writable = params.readonly !== true && resume.length === 0;
-  const inherited = writable ? claimWriter(ctx.cwd) : true;
-  let release = (): void => {
-    if (writable) releaseWriter(ctx.cwd);
-  };
+  const stayInParent = !writable || claimWriter(ctx.cwd);
+  const release = writable ? () => releaseWriter(ctx.cwd) : () => undefined;
+  let handedOff = false;
   try {
-    return await runLocalTask(params, signal, ctx, runtime, {
+    const outcome = await runLocalTask(params, signal, ctx, runtime, {
       catalog,
       resume,
       parentModel,
-      sessionDir,
-      writable,
-      inherited,
-      holdClaim() {
-        const finish = release;
-        release = () => {};
-        return finish;
-      },
+      sessionDir: join(runtime.home, 'tasks', 'sessions'),
+      stayInParent,
+      release,
     });
+    handedOff = outcome.background;
+    return outcome.result;
   } finally {
-    release();
+    if (!handedOff) release();
   }
 }
 
@@ -309,38 +306,26 @@ interface LocalRun {
   resume: string;
   parentModel: string | undefined;
   sessionDir: string;
-  writable: boolean;
-  inherited: boolean;
-  holdClaim: () => () => void;
+  stayInParent: boolean;
+  release: () => void;
 }
 
 async function runLocalTask(
-  params: {
-    prompt: string;
-    description: string;
-    subagent_type: string;
-    model?: string;
-    readonly?: boolean;
-    run_in_background?: boolean;
-    resume?: string;
-    environment?: string;
-    cloud_base_branch?: string;
-  },
+  params: TaskParams,
   signal: AbortSignal | undefined,
   ctx: ExtensionToolContext,
   runtime: TaskRuntime,
   local: LocalRun,
-): Promise<AgentToolResult<ToolDetails>> {
+): Promise<{ background: boolean; result: AgentToolResult<ToolDetails> }> {
   const rejectedModel = modelRejection(params.model, await listInstalledModels(params.model));
   if (rejectedModel) throw new Error(rejectedModel);
   const id = local.resume || taskId();
-  const cwd = taskCwd({
+  const cwd = await taskCwd({
     parent: ctx.cwd,
     sessionDir: local.sessionDir,
     id,
     resume: local.resume.length > 0,
-    readonly: params.readonly === true,
-    inherited: local.inherited,
+    stayInParent: local.stayInParent,
   });
   rememberCheckout(local.sessionDir, id, cwd);
   const agent = local.catalog.agents.find((entry) => entry.name === params.subagent_type);
@@ -365,34 +350,30 @@ async function runLocalTask(
   );
   if ('error' in plan) throw new Error(plan.error);
   if (shouldBackground(params.run_in_background, agent?.isBackground === true)) {
-    startBackground(id, params.description, plan.launch, runtime, local.holdClaim());
-    return textResult(
-      `Started background agent ${id} (${params.description}). Working directory: ${cwd}. Resume this agent with Task resume set to ${id}. The result arrives as a follow-up. task_output can read it.`,
-      { kind: 'task', id },
-    );
+    startBackground(id, params.description, plan.launch, runtime, local.release);
+    return {
+      background: true,
+      result: textResult(
+        `Started background agent ${id} (${params.description}). Working directory: ${cwd}. Resume this agent with Task resume set to ${id}. The result arrives as a follow-up. task_output can read it.`,
+        { kind: 'task', id },
+      ),
+    };
   }
-  return finishTask({
-    id,
-    description: params.description,
-    launch: plan.launch,
-    signal,
-    home: runtime.home,
-    cwd,
-  });
+  return {
+    background: false,
+    result: await finishTask({
+      id,
+      description: params.description,
+      launch: plan.launch,
+      signal,
+      home: runtime.home,
+      cwd,
+    }),
+  };
 }
 
 async function runCloud(
-  params: {
-    prompt: string;
-    description: string;
-    subagent_type: string;
-    model?: string;
-    readonly?: boolean;
-    run_in_background?: boolean;
-    resume?: string;
-    environment?: string;
-    cloud_base_branch?: string;
-  },
+  params: TaskParams,
   agents: readonly AgentRecord[],
   cwd: string,
   parentModelId: string | undefined,

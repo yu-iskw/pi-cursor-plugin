@@ -1,4 +1,3 @@
-import { spawnSync } from 'node:child_process';
 import {
   chmodSync,
   existsSync,
@@ -32,7 +31,7 @@ import {
   normalizeQuestions,
 } from './cursor-actions.js';
 import { parseFrontmatter } from './frontmatter.js';
-import { loadRegistry, saveRegistry } from './manager.js';
+import { git, loadRegistry, saveRegistry } from './manager.js';
 import {
   cursorMcpServers,
   formatMcpMessage,
@@ -53,13 +52,7 @@ import {
   shouldBackground,
   suggestModels,
 } from './subagent.js';
-import {
-  claimWriter,
-  createTaskWorktree,
-  releaseWriter,
-  rememberCheckout,
-  writerCount,
-} from './worktree.js';
+import { claimWriter, createTaskWorktree, releaseWriter, rememberCheckout } from './worktree.js';
 
 import type { InstalledPlugin } from './manager.js';
 import type { ExtensionAPI, ExtensionToolContext } from '@earendil-works/pi-coding-agent';
@@ -594,7 +587,10 @@ describe('pstack compatibility', () => {
       releaseWriter(claim);
       releaseWriter(claim);
       expect(() => rememberCheckout(home, '../evil', repo)).toThrow('Rejected resume id');
-      expect(() => createTaskWorktree(home, 'task-abcd1234')).toThrow('not a git repository');
+      await expect(createTaskWorktree(home, '../evil')).rejects.toThrow('Rejected resume id');
+      await expect(createTaskWorktree(home, 'task-abcd1234')).rejects.toThrow(
+        'not a git repository',
+      );
       const script = join(home, 'cwd.cjs');
       writeFileSync(script, CWD_SCRIPT);
       chmodSync(script, 0o755);
@@ -622,13 +618,29 @@ describe('pstack compatibility', () => {
         undefined,
         ctx,
       );
-      expect(background.content.map((part) => part.text).join('\n')).toContain(
-        `Working directory: ${repo}`,
-      );
-      await waitUntil(
-        () => writerCount(repo) === 0,
-        'background writer did not release the checkout',
-      );
+      const backgroundText = background.content.map((part) => part.text).join('\n');
+      expect(backgroundText).toContain(`Working directory: ${repo}`);
+      const backgroundId = /Started background agent (task-[a-z0-9]+)/.exec(backgroundText)?.[1];
+      if (!backgroundId) throw new Error('missing background agent id');
+      const readOutput = tools.get('task_output')?.execute;
+      if (!readOutput) throw new Error('task_output tool was not registered');
+      await waitUntil(async () => {
+        const record = await readOutput(
+          'output',
+          {
+            prompt: '',
+            description: '',
+            subagent_type: 'generalPurpose',
+            task_id: backgroundId,
+          },
+          undefined,
+          undefined,
+          ctx,
+        );
+        return record.content.some(
+          (part) => part.text.startsWith('done ') || part.text.startsWith('error '),
+        );
+      }, 'background writer did not finish');
       expect(claimWriter(repo)).toBe(true);
       const reading = await task.execute(
         'read',
@@ -658,11 +670,7 @@ describe('pstack compatibility', () => {
       isolated = cwdFrom(writingText);
       expect(isolated.startsWith(join(home, 'wt-root'))).toBe(true);
       expect(isolated).not.toBe(repo);
-      const branch = spawnSync('git', ['branch', '--show-current'], {
-        cwd: isolated,
-        encoding: 'utf8',
-      });
-      expect(branch.stdout.trim().startsWith('pstack/task-')).toBe(true);
+      expect(git(['branch', '--show-current'], isolated).startsWith('pstack/task-')).toBe(true);
       const agentId = /Agent id: (task-[a-z0-9]+)/.exec(writingText)?.[1];
       if (!agentId) throw new Error('missing agent id');
       writeFileSync(join(home, 'tasks', 'sessions', `${agentId}.jsonl`), `{"id":"${agentId}"}\n`);
@@ -693,7 +701,6 @@ describe('pstack compatibility', () => {
       );
       expect(cwdFrom(third.content.map((part) => part.text).join('\n'))).toBe(repo);
     } finally {
-      if (isolated) spawnSync('git', ['worktree', 'remove', '--force', isolated], { cwd: repo });
       releaseWriter(repo);
       if (previousBin === undefined) delete process.env.PI_BIN;
       else process.env.PI_BIN = previousBin;
@@ -801,6 +808,7 @@ interface RegisteredTool {
       readonly?: boolean;
       run_in_background?: boolean;
       resume?: string;
+      task_id?: string;
       environment?: string;
       cloud_base_branch?: string;
     },
@@ -829,19 +837,15 @@ if (process.stdin.readableEnded) finish();
 `;
 
 function initGit(repo: string): void {
-  const git = (args: string[]): void => {
-    const result = spawnSync('git', args, { cwd: repo, encoding: 'utf8' });
-    if (result.status !== 0) throw new Error(result.stderr || `git ${args[0] ?? 'command'} failed`);
-  };
-  git(['init', '-b', 'main']);
-  git(['config', 'user.email', 'test@example.com']);
-  git(['config', 'user.name', 'test']);
-  git(['commit', '--allow-empty', '-m', 'init']);
+  git(['init', '-b', 'main'], repo);
+  git(['config', 'user.email', 'test@example.com'], repo);
+  git(['config', 'user.name', 'test'], repo);
+  git(['commit', '--allow-empty', '-m', 'init'], repo);
 }
 
-async function waitUntil(ready: () => boolean, label: string): Promise<void> {
+async function waitUntil(ready: () => boolean | Promise<boolean>, label: string): Promise<void> {
   const deadline = Date.now() + 8000;
-  while (!ready()) {
+  while (!(await ready())) {
     if (Date.now() > deadline) throw new Error(label);
     await new Promise((resolve) => {
       setTimeout(resolve, 20);

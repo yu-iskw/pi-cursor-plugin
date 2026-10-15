@@ -1,4 +1,4 @@
-import { spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, join } from 'node:path';
@@ -19,10 +19,6 @@ export function releaseWriter(cwd: string): void {
   else writers.set(cwd, current - 1);
 }
 
-export function writerCount(cwd: string): number {
-  return writers.get(cwd) ?? 0;
-}
-
 export function worktreeRoot(): string {
   return process.env.PI_CURSOR_WORKTREE_ROOT?.trim() || join(homedir(), '.cursor', 'worktrees');
 }
@@ -39,28 +35,35 @@ export function rememberedCheckout(sessionDir: string, id: string): string | und
   return value || undefined;
 }
 
-export function taskCwd(input: {
+export async function taskCwd(input: {
   parent: string;
   sessionDir: string;
   id: string;
   resume: boolean;
-  readonly: boolean;
-  inherited: boolean;
-}): string {
-  if (input.resume) return rememberedCheckout(input.sessionDir, input.id) ?? input.parent;
-  if (input.readonly || input.inherited) return input.parent;
+  stayInParent: boolean;
+}): Promise<string> {
+  if (input.resume) {
+    // Agents started before checkout files existed stay in the parent directory.
+    return rememberedCheckout(input.sessionDir, input.id) ?? input.parent;
+  }
+  if (input.stayInParent) return input.parent;
   return createTaskWorktree(input.parent, input.id);
 }
 
-export function createTaskWorktree(repoCwd: string, taskId: string): string {
-  const top = runGit(['rev-parse', '--show-toplevel'], repoCwd);
+export async function createTaskWorktree(repoCwd: string, taskId: string): Promise<string> {
+  if (!validSessionId(taskId)) throw new Error(`Rejected resume id: ${taskId}`);
+  const top = await runGit(['rev-parse', '--show-toplevel'], repoCwd);
   if (top.status !== 0 || !top.stdout.trim()) {
     throw new Error(`Cannot isolate Task ${taskId}: ${repoCwd} is not a git repository.`);
   }
   const root = top.stdout.trim();
-  const destination = join(worktreeRoot(), basename(root), taskId);
-  mkdirSync(join(worktreeRoot(), basename(root)), { recursive: true });
-  const added = runGit(['worktree', 'add', '-b', `pstack/${taskId}`, destination, 'HEAD'], root);
+  const parent = join(worktreeRoot(), basename(root));
+  const destination = join(parent, taskId);
+  mkdirSync(parent, { recursive: true });
+  const added = await runGit(
+    ['worktree', 'add', '-b', `pstack/${taskId}`, destination, 'HEAD'],
+    root,
+  );
   if (added.status !== 0) {
     throw new Error(`Cannot create a worktree for Task ${taskId}: ${added.stderr.trim()}`);
   }
@@ -72,11 +75,36 @@ function checkoutFile(sessionDir: string, id: string): string {
   return join(sessionDir, `${id}.cwd`);
 }
 
-function runGit(args: string[], cwd: string): { status: number; stdout: string; stderr: string } {
-  const result = spawnSync('git', args, { cwd, encoding: 'utf8' });
-  return {
-    status: result.status === null ? 1 : result.status,
-    stdout: result.stdout,
-    stderr: result.stderr.trim() || (result.error instanceof Error ? result.error.message : ''),
-  };
+function runGit(
+  args: string[],
+  cwd: string,
+): Promise<{ status: number; stdout: string; stderr: string }> {
+  return new Promise((resolve) => {
+    const child = spawn('git', args, { cwd, stdio: ['ignore', 'pipe', 'pipe'] });
+    const out: Buffer[] = [];
+    const err: Buffer[] = [];
+    let settled = false;
+    const finish = (status: number, extra: string): void => {
+      if (settled) return;
+      settled = true;
+      const stderr = Buffer.concat(err).toString('utf8').trim();
+      resolve({
+        status,
+        stdout: Buffer.concat(out).toString('utf8'),
+        stderr: stderr || extra,
+      });
+    };
+    child.stdout.on('data', (chunk: Buffer) => {
+      out.push(chunk);
+    });
+    child.stderr.on('data', (chunk: Buffer) => {
+      err.push(chunk);
+    });
+    child.on('error', (error) => {
+      finish(1, error.message);
+    });
+    child.on('close', (status) => {
+      finish(status ?? 1, '');
+    });
+  });
 }
