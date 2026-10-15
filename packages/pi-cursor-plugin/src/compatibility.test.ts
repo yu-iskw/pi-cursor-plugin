@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process';
 import {
   chmodSync,
   existsSync,
@@ -52,6 +53,13 @@ import {
   shouldBackground,
   suggestModels,
 } from './subagent.js';
+import {
+  claimWriter,
+  createTaskWorktree,
+  releaseWriter,
+  rememberCheckout,
+  writerCount,
+} from './worktree.js';
 
 import type { InstalledPlugin } from './manager.js';
 import type { ExtensionAPI, ExtensionToolContext } from '@earendil-works/pi-coding-agent';
@@ -570,6 +578,131 @@ describe('pstack compatibility', () => {
     }
   });
 
+  it('gives a concurrent writable Task its own git worktree', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'pstack-wt-'));
+    const repo = join(home, 'repo');
+    mkdirSync(repo);
+    const previousBin = process.env.PI_BIN;
+    const previousRoot = process.env.PI_CURSOR_WORKTREE_ROOT;
+    let isolated = '';
+    try {
+      writePstack(home);
+      initGit(repo);
+      const claim = join(home, 'claim');
+      expect(claimWriter(claim)).toBe(true);
+      expect(claimWriter(claim)).toBe(false);
+      releaseWriter(claim);
+      releaseWriter(claim);
+      expect(() => rememberCheckout(home, '../evil', repo)).toThrow('Rejected resume id');
+      expect(() => createTaskWorktree(home, 'task-abcd1234')).toThrow('not a git repository');
+      const script = join(home, 'cwd.cjs');
+      writeFileSync(script, CWD_SCRIPT);
+      chmodSync(script, 0o755);
+      process.env.PI_BIN = script;
+      process.env.PI_CURSOR_WORKTREE_ROOT = join(home, 'wt-root');
+      const tools = new Map<string, RegisteredTool>();
+      const pi = {
+        registerTool(tool: RegisteredTool) {
+          tools.set(tool.name, tool);
+        },
+      };
+      registerCursorTools(pi as unknown as ExtensionAPI, () => {}, home);
+      const task = tools.get('Task');
+      if (!task) throw new Error('Task tool was not registered');
+      const ctx = { cwd: repo, hasUI: false } as ExtensionToolContext;
+      const background = await task.execute(
+        'background',
+        {
+          prompt: 'edit the loader',
+          description: 'background writer',
+          subagent_type: 'generalPurpose',
+          run_in_background: true,
+        },
+        undefined,
+        undefined,
+        ctx,
+      );
+      expect(background.content.map((part) => part.text).join('\n')).toContain(
+        `Working directory: ${repo}`,
+      );
+      await waitUntil(
+        () => writerCount(repo) === 0,
+        'background writer did not release the checkout',
+      );
+      expect(claimWriter(repo)).toBe(true);
+      const reading = await task.execute(
+        'read',
+        {
+          prompt: 'read the loader',
+          description: 'readonly',
+          subagent_type: 'generalPurpose',
+          readonly: true,
+        },
+        undefined,
+        undefined,
+        ctx,
+      );
+      expect(cwdFrom(reading.content.map((part) => part.text).join('\n'))).toBe(repo);
+      const writing = await task.execute(
+        'write',
+        {
+          prompt: 'edit the loader too',
+          description: 'second writer',
+          subagent_type: 'generalPurpose',
+        },
+        undefined,
+        undefined,
+        ctx,
+      );
+      const writingText = writing.content.map((part) => part.text).join('\n');
+      isolated = cwdFrom(writingText);
+      expect(isolated.startsWith(join(home, 'wt-root'))).toBe(true);
+      expect(isolated).not.toBe(repo);
+      const branch = spawnSync('git', ['branch', '--show-current'], {
+        cwd: isolated,
+        encoding: 'utf8',
+      });
+      expect(branch.stdout.trim().startsWith('pstack/task-')).toBe(true);
+      const agentId = /Agent id: (task-[a-z0-9]+)/.exec(writingText)?.[1];
+      if (!agentId) throw new Error('missing agent id');
+      writeFileSync(join(home, 'tasks', 'sessions', `${agentId}.jsonl`), `{"id":"${agentId}"}\n`);
+      releaseWriter(repo);
+      const resumed = await task.execute(
+        'resume',
+        {
+          prompt: 'continue in the same checkout',
+          description: 'resume writer',
+          subagent_type: 'generalPurpose',
+          resume: agentId,
+        },
+        undefined,
+        undefined,
+        ctx,
+      );
+      expect(cwdFrom(resumed.content.map((part) => part.text).join('\n'))).toBe(isolated);
+      const third = await task.execute(
+        'third',
+        {
+          prompt: 'edit after the other writer finished',
+          description: 'third writer',
+          subagent_type: 'generalPurpose',
+        },
+        undefined,
+        undefined,
+        ctx,
+      );
+      expect(cwdFrom(third.content.map((part) => part.text).join('\n'))).toBe(repo);
+    } finally {
+      if (isolated) spawnSync('git', ['worktree', 'remove', '--force', isolated], { cwd: repo });
+      releaseWriter(repo);
+      if (previousBin === undefined) delete process.env.PI_BIN;
+      else process.env.PI_BIN = previousBin;
+      if (previousRoot === undefined) delete process.env.PI_CURSOR_WORKTREE_ROOT;
+      else process.env.PI_CURSOR_WORKTREE_ROOT = previousRoot;
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
   it('lists Cursor MCP servers for why and reflect', () => {
     const home = mkdtempSync(join(tmpdir(), 'pstack-mcp-'));
     try {
@@ -667,6 +800,7 @@ interface RegisteredTool {
       model?: string;
       readonly?: boolean;
       run_in_background?: boolean;
+      resume?: string;
       environment?: string;
       cloud_base_branch?: string;
     },
@@ -674,6 +808,50 @@ interface RegisteredTool {
     onUpdate: undefined,
     ctx: ExtensionToolContext,
   ) => Promise<{ content: { type: string; text: string }[] }>;
+}
+
+const CWD_SCRIPT = `#!/usr/bin/env node
+const chunks = [];
+let ended = false;
+function finish() {
+  if (ended) return;
+  ended = true;
+  process.stdout.write(
+    JSON.stringify({ cwd: process.cwd(), stdin: Buffer.concat(chunks).toString('utf8') }),
+  );
+}
+process.stdin.on('data', (chunk) => {
+  chunks.push(chunk);
+});
+process.stdin.on('end', finish);
+process.stdin.resume();
+if (process.stdin.readableEnded) finish();
+`;
+
+function initGit(repo: string): void {
+  const git = (args: string[]): void => {
+    const result = spawnSync('git', args, { cwd: repo, encoding: 'utf8' });
+    if (result.status !== 0) throw new Error(result.stderr || `git ${args[0] ?? 'command'} failed`);
+  };
+  git(['init', '-b', 'main']);
+  git(['config', 'user.email', 'test@example.com']);
+  git(['config', 'user.name', 'test']);
+  git(['commit', '--allow-empty', '-m', 'init']);
+}
+
+async function waitUntil(ready: () => boolean, label: string): Promise<void> {
+  const deadline = Date.now() + 8000;
+  while (!ready()) {
+    if (Date.now() > deadline) throw new Error(label);
+    await new Promise((resolve) => {
+      setTimeout(resolve, 20);
+    });
+  }
+}
+
+function cwdFrom(text: string): string {
+  const parsed = JSON.parse(text.slice(text.indexOf('{'))) as { cwd: string };
+  return parsed.cwd;
 }
 
 function blankRequest(cwd: string) {

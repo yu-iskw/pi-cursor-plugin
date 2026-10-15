@@ -23,7 +23,7 @@ function validSessionChar(char: string, edge: boolean): boolean {
   return !edge && (char === '.' || char === '_' || char === '-');
 }
 
-function validSessionId(id: string): boolean {
+export function validSessionId(id: string): boolean {
   if (id.length < 1 || id.length > 128) return false;
   for (let index = 0; index < id.length; index += 1) {
     const edge = index === 0 || index === id.length - 1;
@@ -141,6 +141,7 @@ function taskPrompt(
       `Parent-provided poteto-mode SKILL.md path: ${poteto.filePath}\nUse this absolute path. It is the path your parent gave you.`,
     );
   }
+  lines.push(`Working directory: ${request.cwd}`);
   lines.push(`Parent task (${request.description}):\n${request.prompt}`);
   return lines.join('\n\n');
 }

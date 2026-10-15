@@ -24,6 +24,7 @@ import {
   shouldBackground,
 } from './subagent.js';
 import { createTaskBoard } from './task-board.js';
+import { claimWriter, releaseWriter, rememberCheckout, taskCwd } from './worktree.js';
 
 import type { AgentRecord } from './catalog.js';
 import type { AskQuestion, TodoItem } from './cursor-actions.js';
@@ -96,13 +97,14 @@ export function registerCursorTools(
     name: 'Task',
     label: 'Task',
     description:
-      'Cursor Task tool. Spawn a pstack subagent (poteto-agent, comment-sicko, or generalPurpose) and return its report. Omit model or pass auto or inherit-parent to use the parent Pi model. environment "cloud" starts a Cursor cloud agent. resume continues that agent id.',
+      'Cursor Task tool. Spawn a pstack subagent (poteto-agent, comment-sicko, or generalPurpose) and return its report. Omit model or pass auto or inherit-parent to use the parent Pi model. environment "cloud" starts a Cursor cloud agent. A second concurrent local writer gets its own git worktree. resume continues that agent id and its checkout.',
     promptSnippet: 'Spawn a Cursor-style subagent',
     promptGuidelines: [
       'Use the Task tool for pstack subagents. subagent_type poteto-agent, comment-sicko, or generalPurpose.',
       'Pass readonly true for read-only exploration. poteto-agent runs in the background unless run_in_background is false.',
       'Pass resume with an agent id only when the same checkout or process must continue. A missing session is an error.',
       'environment "cloud" starts a Cursor cloud agent when CURSOR_API_KEY and a GitHub origin are set. A rejected model slug includes the closest slugs of that family.',
+      'Concurrent writable Tasks each get a git worktree on branch pstack/<id>. Readonly Tasks stay in the parent checkout.',
     ],
     parameters: Type.Object({
       prompt: Type.String({ description: 'Full task for the subagent' }),
@@ -277,10 +279,71 @@ async function executeTask(
   if (wantsCloud(params.environment, params.cloud_base_branch, resume)) {
     return runCloud(params, catalog.agents, ctx.cwd, ctx.model?.id, runtime);
   }
+  const sessionDir = join(runtime.home, 'tasks', 'sessions');
+  const writable = params.readonly !== true && resume.length === 0;
+  const inherited = writable ? claimWriter(ctx.cwd) : true;
+  let release = (): void => {
+    if (writable) releaseWriter(ctx.cwd);
+  };
+  try {
+    return await runLocalTask(params, signal, ctx, runtime, {
+      catalog,
+      resume,
+      parentModel,
+      sessionDir,
+      writable,
+      inherited,
+      holdClaim() {
+        const finish = release;
+        release = () => {};
+        return finish;
+      },
+    });
+  } finally {
+    release();
+  }
+}
+
+interface LocalRun {
+  catalog: ReturnType<typeof loadCatalog>;
+  resume: string;
+  parentModel: string | undefined;
+  sessionDir: string;
+  writable: boolean;
+  inherited: boolean;
+  holdClaim: () => () => void;
+}
+
+async function runLocalTask(
+  params: {
+    prompt: string;
+    description: string;
+    subagent_type: string;
+    model?: string;
+    readonly?: boolean;
+    run_in_background?: boolean;
+    resume?: string;
+    environment?: string;
+    cloud_base_branch?: string;
+  },
+  signal: AbortSignal | undefined,
+  ctx: ExtensionToolContext,
+  runtime: TaskRuntime,
+  local: LocalRun,
+): Promise<AgentToolResult<ToolDetails>> {
   const rejectedModel = modelRejection(params.model, await listInstalledModels(params.model));
   if (rejectedModel) throw new Error(rejectedModel);
-  const id = resume || taskId();
-  const agent = catalog.agents.find((entry) => entry.name === params.subagent_type);
+  const id = local.resume || taskId();
+  const cwd = taskCwd({
+    parent: ctx.cwd,
+    sessionDir: local.sessionDir,
+    id,
+    resume: local.resume.length > 0,
+    readonly: params.readonly === true,
+    inherited: local.inherited,
+  });
+  rememberCheckout(local.sessionDir, id, cwd);
+  const agent = local.catalog.agents.find((entry) => entry.name === params.subagent_type);
   const plan = planTask(
     {
       prompt: params.prompt,
@@ -288,27 +351,34 @@ async function executeTask(
       subagentType: params.subagent_type,
       model: params.model,
       readonly: params.readonly === true,
-      cwd: ctx.cwd,
+      cwd,
       depth: currentTaskDepth(),
       sessionId: id,
-      sessionDir: join(runtime.home, 'tasks', 'sessions'),
-      resume: resume.length > 0,
+      sessionDir: local.sessionDir,
+      resume: local.resume.length > 0,
       environment: params.environment,
       cloudBaseBranch: params.cloud_base_branch,
-      parentModel,
+      parentModel: local.parentModel,
     },
-    catalog.agents,
-    catalog.skills,
+    local.catalog.agents,
+    local.catalog.skills,
   );
   if ('error' in plan) throw new Error(plan.error);
   if (shouldBackground(params.run_in_background, agent?.isBackground === true)) {
-    startBackground(id, params.description, plan.launch, runtime);
+    startBackground(id, params.description, plan.launch, runtime, local.holdClaim());
     return textResult(
-      `Started background agent ${id} (${params.description}). Resume this agent with Task resume set to ${id}. The result arrives as a follow-up. task_output can read it.`,
+      `Started background agent ${id} (${params.description}). Working directory: ${cwd}. Resume this agent with Task resume set to ${id}. The result arrives as a follow-up. task_output can read it.`,
       { kind: 'task', id },
     );
   }
-  return finishTask(id, params.description, plan.launch, signal, runtime.home);
+  return finishTask({
+    id,
+    description: params.description,
+    launch: plan.launch,
+    signal,
+    home: runtime.home,
+    cwd,
+  });
 }
 
 async function runCloud(
@@ -383,6 +453,7 @@ function startBackground(
   description: string,
   launch: SubagentLaunch,
   runtime: TaskRuntime,
+  onDone: () => void,
 ): void {
   const record: TaskRecord = { id, description, status: 'running', output: '' };
   runtime.board.put(record);
@@ -402,30 +473,32 @@ function startBackground(
     .catch((error: unknown) => {
       const output = error instanceof Error ? error.message : String(error);
       runtime.board.update(id, { status: 'error', output });
-    });
+    })
+    .finally(onDone);
 }
 
-async function finishTask(
-  id: string,
-  description: string,
-  launch: SubagentLaunch,
-  signal: AbortSignal | undefined,
-  home: string,
-): Promise<AgentToolResult<ToolDetails>> {
+async function finishTask(input: {
+  id: string;
+  description: string;
+  launch: SubagentLaunch;
+  signal: AbortSignal | undefined;
+  home: string;
+  cwd: string;
+}): Promise<AgentToolResult<ToolDetails>> {
   try {
-    const result = await runSubagent(launch, signal);
-    const logPath = writeLog(home, id, `${result.stdout}\n${result.stderr}`);
+    const result = await runSubagent(input.launch, input.signal);
+    const logPath = writeLog(input.home, input.id, `${result.stdout}\n${result.stderr}`);
     const rendered = resultText(result, logPath);
     return textResult(
-      `Agent id: ${id}\n${description}\n${rendered.text}`,
+      `Working directory: ${input.cwd}\nAgent id: ${input.id}\n${input.description}\n${rendered.text}`,
       {
         kind: 'task',
-        id,
+        id: input.id,
       },
       rendered.failed,
     );
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`Cannot start ${launch.bin}: ${message}`, { cause: error });
+    throw new Error(`Cannot start ${input.launch.bin}: ${message}`, { cause: error });
   }
 }
