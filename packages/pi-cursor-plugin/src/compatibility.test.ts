@@ -45,6 +45,7 @@ import {
   cursorMcpServers,
   formatMcpMessage,
   mcpCatalogDir,
+  mcpToolDescriptor,
   writeMcpCatalog,
 } from './mcp-catalog.js';
 import { registerCursorTools } from './register-tools.js';
@@ -1067,6 +1068,36 @@ describe('pstack review follow-ups', () => {
       expect(context).toContain(parent);
       expect(context).toContain(join(parent, 'task-child1', 'task-child1.jsonl'));
       expect(context).not.toContain(projectSlug(worktree));
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('writes Cursor MCP tool descriptors for /why', () => {
+    const home = mkdtempSync(join(tmpdir(), 'pstack-mcp-tools-'));
+    try {
+      const directory = mcpCatalogDir(home, home);
+      const servers = [
+        {
+          name: 'my-server',
+          description: 'Notes',
+          config: { url: 'https://example.test/mcp' },
+        },
+      ];
+      const tool = mcpToolDescriptor({
+        name: 'mcp__my_server__search_docs',
+        description: 'Search long-form documents',
+        parameters: { type: 'object', properties: { query: { type: 'string' } } },
+      });
+      if (!tool) throw new Error('MCP tool descriptor was not parsed');
+      writeMcpCatalog(directory, servers, [tool]);
+      const file = join(directory, 'my-server', 'tools', 'search_docs.json');
+      const body = readFileSync(file, 'utf8');
+      expect(body).toContain('Search long-form documents');
+      expect(body).toContain('query');
+      expect(mcpToolDescriptor({ name: 'read' })).toBeUndefined();
+      writeMcpCatalog(directory, servers, []);
+      expect(existsSync(file)).toBe(false);
     } finally {
       rmSync(home, { recursive: true, force: true });
     }

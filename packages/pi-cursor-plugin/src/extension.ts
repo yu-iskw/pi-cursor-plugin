@@ -17,6 +17,7 @@ import {
   cursorMcpServers,
   formatMcpMessage,
   mcpCatalogDir,
+  mcpToolDescriptor,
   writeMcpCatalog,
 } from './mcp-catalog.js';
 import { registerCursorTools } from './register-tools.js';
@@ -26,7 +27,7 @@ import {
   sessionIdentity,
 } from './workspace-context.js';
 
-import type { CursorMcpServer } from './mcp-catalog.js';
+import type { CursorMcpServer, McpToolDescriptor } from './mcp-catalog.js';
 import type { ExtensionAPI, ExtensionCommandContext } from '@earendil-works/pi-coding-agent';
 
 const PI_COMMANDS = [
@@ -132,29 +133,48 @@ export default function (pi: ExtensionAPI): void {
   });
   registerSkillCommands(pi, home);
   const touchedFiles = new Set<string>();
+  let sessionCwd = process.cwd();
+  let sessionTrusted = false;
   pi.on('tool_call', (event) => {
     for (const file of toolPaths(event.toolName, event.input)) touchedFiles.add(file);
+    publishCatalog(sessionCwd, sessionTrusted);
   });
   pi.on('resources_discover', () => {
     const catalog = loadCatalog(home);
     return { skillPaths: catalog.skillPaths, promptPaths: catalog.promptPaths };
   });
   const registeredMcp = new Set<string>();
-  const syncMcp = (cwd: string, projectTrusted: boolean): CursorMcpServer[] => {
+  let refreshGeneration = 0;
+  const publishCatalog = (cwd: string, projectTrusted: boolean): CursorMcpServer[] => {
     if (process.argv.includes('--no-mcp')) return [];
     const servers = cursorMcpServers({ home, cwd, projectTrusted });
     const connected = servers.filter((server) => registerServer(pi, server, registeredMcp));
-    writeMcpCatalog(mcpCatalogDir(cwd), connected);
+    writeMcpCatalog(mcpCatalogDir(cwd), connected, listedMcpTools(pi));
+    return connected;
+  };
+  const syncMcp = (cwd: string, projectTrusted: boolean): CursorMcpServer[] => {
+    const connected = publishCatalog(cwd, projectTrusted);
+    refreshGeneration += 1;
+    const generation = refreshGeneration;
+    for (const delay of [250, 1000, 3000]) {
+      setTimeout(() => {
+        if (generation === refreshGeneration) publishCatalog(cwd, projectTrusted);
+      }, delay);
+    }
     return connected;
   };
   syncMcp(process.cwd(), false);
   pi.on('session_start', (_event, ctx) => {
     touchedFiles.clear();
+    sessionCwd = ctx.cwd;
+    sessionTrusted = ctx.isProjectTrusted();
     sessionTodos.sync(ctx);
     syncMcp(ctx.cwd, ctx.isProjectTrusted());
     publishLiveSession(ctx, '');
   });
   pi.on('before_agent_start', (event, ctx) => {
+    sessionCwd = ctx.cwd;
+    sessionTrusted = ctx.isProjectTrusted();
     sessionTodos.sync(ctx);
     const prompt = userPrompt(event);
     const session = publishLiveSession(ctx, prompt);
@@ -200,6 +220,24 @@ function publishLiveSession(ctx: { cwd: string }, prompt: string): { id?: string
     parentSessionId: process.env.PI_CURSOR_PARENT_SESSION,
   });
   return { id: session.id };
+}
+
+function listedMcpTools(pi: ExtensionAPI): McpToolDescriptor[] {
+  const readTools: unknown = Reflect.get(pi, 'getAllTools');
+  if (typeof readTools !== 'function') return [];
+  let tools: unknown;
+  try {
+    tools = Reflect.apply(readTools, pi, []);
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(tools)) return [];
+  const found: McpToolDescriptor[] = [];
+  for (const tool of tools) {
+    const descriptor = mcpToolDescriptor(tool);
+    if (descriptor) found.push(descriptor);
+  }
+  return found;
 }
 
 function registerServer(

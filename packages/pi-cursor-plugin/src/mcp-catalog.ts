@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
@@ -14,6 +14,31 @@ export interface CursorMcpServer {
 }
 
 const SERVER_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+
+export interface McpToolDescriptor {
+  server: string;
+  name: string;
+  description: string;
+  parameters?: unknown;
+}
+
+export function mcpToolDescriptor(tool: unknown): McpToolDescriptor | undefined {
+  if (!tool || typeof tool !== 'object') return undefined;
+  const rawName: unknown = Reflect.get(tool, 'name');
+  if (typeof rawName !== 'string') return undefined;
+  const match = /^mcp__(.+?)__(.+)$/.exec(rawName);
+  const server = match?.[1];
+  const name = match?.[2];
+  if (!server || !name || !SERVER_NAME.test(server) || !SERVER_NAME.test(name)) return undefined;
+  const description: unknown = Reflect.get(tool, 'description');
+  const parameters: unknown = Reflect.get(tool, 'parameters');
+  return {
+    server,
+    name,
+    description: typeof description === 'string' && description.trim() ? description.trim() : name,
+    parameters,
+  };
+}
 
 export function mcpCatalogDir(cwd: string, homeDir = homedir()): string {
   return join(homeDir, '.cursor', 'projects', projectSlug(cwd), 'mcps');
@@ -37,7 +62,11 @@ export function cursorMcpServers(input: {
   return [...servers.values()];
 }
 
-export function writeMcpCatalog(directory: string, servers: readonly CursorMcpServer[]): void {
+export function writeMcpCatalog(
+  directory: string,
+  servers: readonly CursorMcpServer[],
+  tools: readonly McpToolDescriptor[] = [],
+): void {
   mkdirSync(directory, { recursive: true, mode: 0o700 });
   const indexPath = join(directory, 'index.json');
   const previous = readIndex(indexPath);
@@ -53,6 +82,10 @@ export function writeMcpCatalog(directory: string, servers: readonly CursorMcpSe
       `${JSON.stringify({ serverIdentifier: server.name, serverName: server.name }, null, 2)}\n`,
     );
     writeFileSync(join(dir, 'INSTRUCTIONS.md'), `${server.description}\n`);
+    writeServerTools(
+      dir,
+      tools.filter((tool) => serverKey(tool.server) === serverKey(server.name)),
+    );
   }
   writeFileSync(indexPath, `${JSON.stringify(names, null, 2)}\n`);
 }
@@ -88,9 +121,40 @@ export function formatMcpMessage(
     MCP_HEADING,
     '',
     'These are the enabled MCP servers. A readonly Task passes --no-mcp and cannot call them.',
-    `Inspect \`${directory}\` for server metadata.`,
+    `Inspect \`${directory}\` for server metadata and each server's tools directory.`,
     lines.join('\n'),
   ].join('\n');
+}
+
+function serverKey(name: string): string {
+  return name.replaceAll(/[^A-Za-z0-9_]/g, '_');
+}
+
+function writeServerTools(directory: string, tools: readonly McpToolDescriptor[]): void {
+  const toolsDir = join(directory, 'tools');
+  if (tools.length === 0) {
+    rmSync(toolsDir, { recursive: true, force: true });
+    return;
+  }
+  mkdirSync(toolsDir, { recursive: true });
+  const keep = new Set<string>();
+  for (const tool of tools) {
+    const file = `${tool.name}.json`;
+    keep.add(file);
+    writeFileSync(join(toolsDir, file), toolDescriptor(tool));
+  }
+  for (const entry of readdirSync(toolsDir)) {
+    if (!keep.has(entry)) rmSync(join(toolsDir, entry));
+  }
+}
+
+function toolDescriptor(tool: McpToolDescriptor): string {
+  const body: { name: string; description: string; arguments?: unknown } = {
+    name: tool.name,
+    description: tool.description,
+  };
+  if (tool.parameters && typeof tool.parameters === 'object') body.arguments = tool.parameters;
+  return `${JSON.stringify(body, null, 2)}\n`;
 }
 
 function pluginMcpFiles(home: string): string[] {
