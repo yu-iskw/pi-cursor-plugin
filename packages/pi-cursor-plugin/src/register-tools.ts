@@ -86,6 +86,14 @@ const ASK_OPTION = Type.Union([
   }),
 ]);
 
+const ASK_ITEM = Type.Object({
+  id: Type.Optional(Type.String()),
+  prompt: Type.Optional(Type.String()),
+  question: Type.Optional(Type.String()),
+  options: Type.Array(ASK_OPTION, { minItems: 1 }),
+  allow_multiple: Type.Optional(Type.Boolean()),
+});
+
 const TODO_STATUS = Type.Union([
   Type.Literal('pending'),
   Type.Literal('in_progress'),
@@ -163,21 +171,15 @@ export function registerCursorTools(
     name: 'AskQuestion',
     label: 'AskQuestion',
     description:
-      'Cursor AskQuestion tool. Ask one question or several. Set allow_multiple to let the user pick more than one option. Options may be strings or { label } objects.',
+      'Cursor AskQuestion tool. Ask one question or several. Use prompt for the question text. Set allow_multiple to let the user pick more than one option. Options are strings or { id, label } objects.',
     promptSnippet: 'Ask the user a multiple-choice question',
     parameters: Type.Object({
+      title: Type.Optional(Type.String()),
+      prompt: Type.Optional(Type.String()),
       question: Type.Optional(Type.String()),
       options: Type.Optional(Type.Array(ASK_OPTION)),
       allow_multiple: Type.Optional(Type.Boolean()),
-      questions: Type.Optional(
-        Type.Array(
-          Type.Object({
-            question: Type.String(),
-            options: Type.Array(ASK_OPTION, { minItems: 1 }),
-            allow_multiple: Type.Optional(Type.Boolean()),
-          }),
-        ),
-      ),
+      questions: Type.Optional(Type.Array(ASK_ITEM)),
     }),
     async execute(
       _toolCallId,
@@ -244,19 +246,31 @@ async function selectOptions(
   ctx: ExtensionToolContext,
   item: AskQuestion,
 ): Promise<string[] | undefined> {
+  const labels = item.options.map((option) => option.label);
   if (!item.allowMultiple) {
-    const choice = await ctx.ui.select(item.question, [...item.options]);
-    return choice ? [choice] : undefined;
+    const choice = await ctx.ui.select(item.question, labels);
+    return choice ? [choiceValue(item, choice)] : undefined;
   }
-  const raw = await ctx.ui.input(item.question, item.options.join(', '));
+  const raw = await ctx.ui.input(item.question, labels.join(', '));
   if (!raw) return undefined;
   const selected = raw
     .split(',')
     .map((option) => option.trim())
     .filter((option) => option.length > 0);
-  const unknown = selected.filter((option) => !item.options.includes(option));
+  const unknown = selected.filter(
+    (option) => !item.options.some((choice) => matches(choice, option)),
+  );
   if (unknown.length > 0) throw new Error(`Unknown options: ${unknown.join(', ')}`);
-  return selected;
+  return selected.map((option) => choiceValue(item, option));
+}
+
+function matches(choice: AskQuestion['options'][number], value: string): boolean {
+  return choice.label === value || choice.id === value;
+}
+
+function choiceValue(item: AskQuestion, value: string): string {
+  const match = item.options.find((choice) => matches(choice, value));
+  return match?.id ?? match?.label ?? value;
 }
 
 interface TaskParams {

@@ -45,52 +45,75 @@ interface AskOption {
   label: string;
 }
 
-interface AskQuestionInput {
+interface AskItemInput {
+  id?: string;
+  prompt?: string;
   question?: string;
   options?: readonly (string | AskOption)[];
   allow_multiple?: boolean;
-  questions?: readonly {
-    question: string;
-    options: readonly (string | AskOption)[];
-    allow_multiple?: boolean;
-  }[];
+}
+
+interface AskQuestionInput extends AskItemInput {
+  title?: string;
+  questions?: readonly AskItemInput[];
+}
+
+export interface AskChoice {
+  id?: string;
+  label: string;
 }
 
 export interface AskQuestion {
   question: string;
-  options: readonly string[];
+  options: readonly AskChoice[];
   allowMultiple: boolean;
 }
 
-function optionLabel(option: string | AskOption): string {
-  return typeof option === 'string' ? option : option.label;
+function askedText(item: AskItemInput): string {
+  const prompt = item.prompt?.trim() ?? '';
+  if (prompt.length > 0) return prompt;
+  return item.question?.trim() ?? '';
+}
+
+function choiceFrom(option: string | AskOption): AskChoice {
+  if (typeof option === 'string') return { label: option };
+  const label = option.label.trim();
+  const id = option.id?.trim();
+  return id ? { id, label } : { label };
+}
+
+function withTitle(title: string | undefined, question: string, first: boolean): string {
+  const heading = title?.trim();
+  if (!first || !heading) return question;
+  return `${heading}: ${question}`;
 }
 
 export function normalizeQuestions(input: AskQuestionInput): AskQuestion[] {
   const source =
     input.questions && input.questions.length > 0
       ? input.questions
-      : input.question && input.options
-        ? [
-            {
-              question: input.question,
-              options: input.options,
-              allow_multiple: input.allow_multiple,
-            },
-          ]
+      : askedText(input) && input.options
+        ? [input]
         : undefined;
-  if (!source) throw new Error('AskQuestion needs a question and options, or a questions array.');
-  return source.map((item) => ({
-    question: item.question,
-    options: item.options.map(optionLabel),
-    allowMultiple: item.allow_multiple === true,
-  }));
+  if (!source) throw new Error('AskQuestion needs a prompt and options, or a questions array.');
+  return source.map((item, index) => {
+    const question = askedText(item);
+    const options = item.options ?? [];
+    if (!question || options.length === 0) {
+      throw new Error('AskQuestion needs a prompt and options, or a questions array.');
+    }
+    return {
+      question: withTitle(input.title, question, index === 0),
+      options: options.map(choiceFrom),
+      allowMultiple: item.allow_multiple === true,
+    };
+  });
 }
 
 export function formatAskWithoutUi(questions: readonly AskQuestion[]): string {
   const blocks = questions.map((item) => {
     const mode = item.allowMultiple ? 'Select one or more.' : 'Select one.';
-    const choices = item.options.map((option) => `- ${option}`).join('\n');
+    const choices = item.options.map((option) => `- ${option.label}`).join('\n');
     return `${mode}\nQuestion: ${item.question}\nOptions:\n${choices}`;
   });
   return `No dialog is available. Ask the user in the conversation.\n${blocks.join('\n\n')}`;

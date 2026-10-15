@@ -345,7 +345,7 @@ describe('pstack compatibility', () => {
       normalizeQuestions({
         questions: [{ question: 'Areas?', options: [{ label: 'style' }], allow_multiple: true }],
       })[0],
-    ).toEqual({ question: 'Areas?', options: ['style'], allowMultiple: true });
+    ).toEqual({ question: 'Areas?', options: [{ label: 'style' }], allowMultiple: true });
     expect(shouldBackground(undefined, true)).toBe(true);
     expect(shouldBackground(false, true)).toBe(false);
   });
@@ -410,6 +410,9 @@ describe('pstack compatibility', () => {
     expect(
       suggestModels('grok-4.7-xhigh-fast', ['grok-4.7-high', 'claude-opus-5-5-xhigh']),
     ).toEqual(['grok-4.7-high']);
+    expect(
+      suggestModels('grok-4.7-xhigh-fast', ['grok-4.7-low', 'grok-4.7-max', 'grok-4.7-high-fast']),
+    ).toEqual(['grok-4.7-high-fast', 'grok-4.7-max', 'grok-4.7-low']);
     expect(rejectedModelMessage('grok-4.7-xhigh-fast', ['grok-4.7-high'])).toContain(
       'Closest grok: grok-4.7-high',
     );
@@ -1023,6 +1026,23 @@ describe('pstack review follow-ups', () => {
     } finally {
       rmSync(home, { recursive: true, force: true });
     }
+  });
+
+  it('accepts a Cursor AskQuestion prompt', () => {
+    const formatted = formatAskWithoutUi(
+      normalizeQuestions({
+        title: 'Setup',
+        questions: [
+          {
+            id: 'budget',
+            prompt: 'Which budget?',
+            options: [{ id: 'large', label: 'large — xhigh reasoning' }],
+          },
+        ],
+      }),
+    );
+    expect(formatted).toContain('Setup: Which budget?');
+    expect(formatted).toContain('large — xhigh reasoning');
   });
 });
 

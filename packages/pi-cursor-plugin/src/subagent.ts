@@ -172,9 +172,44 @@ export function modelFamily(slug: string): string {
   return parts.join('-');
 }
 
+const EFFORT_LADDER = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
+
+function effortRank(slug: string): number {
+  const parts = slug.split('-');
+  if (parts.at(-1) === 'fast') parts.pop();
+  const tail = parts.at(-1);
+  return tail ? EFFORT_LADDER.indexOf(tail) : -1;
+}
+
+function effortDistance(slug: string, target: number): number {
+  const rank = effortRank(slug);
+  if (target < 0 || rank < 0) return Number.MAX_SAFE_INTEGER;
+  return Math.abs(rank - target);
+}
+
 export function suggestModels(slug: string, available: readonly string[]): string[] {
   const family = modelFamily(slug);
-  return available.filter((item) => item !== slug && modelFamily(item) === family);
+  const target = effortRank(slug);
+  const fast = slug.endsWith('-fast');
+  return available
+    .map((item, index) => ({ item, index }))
+    .filter((entry) => entry.item !== slug && modelFamily(entry.item) === family)
+    .sort((left, right) => compareSuggestions(left, right, target, fast))
+    .map((entry) => entry.item);
+}
+
+function compareSuggestions(
+  left: { item: string; index: number },
+  right: { item: string; index: number },
+  target: number,
+  fast: boolean,
+): number {
+  const delta = effortDistance(left.item, target) - effortDistance(right.item, target);
+  if (delta !== 0) return delta;
+  const speed =
+    Number(left.item.endsWith('-fast') !== fast) - Number(right.item.endsWith('-fast') !== fast);
+  if (speed !== 0) return speed;
+  return left.index - right.index;
 }
 
 export function rejectedModelMessage(slug: string, available: readonly string[]): string {
