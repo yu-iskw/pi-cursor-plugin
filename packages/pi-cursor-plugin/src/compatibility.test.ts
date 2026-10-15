@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -13,6 +13,7 @@ import {
   loadRules,
   skillInvocation,
 } from './catalog.js';
+import { cloudReadiness, githubRepoUrl, wantsCloud } from './cloud-task.js';
 import { dispatchCursorPlugin } from './commands.js';
 import {
   applyTodos,
@@ -22,9 +23,22 @@ import {
 } from './cursor-actions.js';
 import { parseFrontmatter } from './frontmatter.js';
 import { saveRegistry } from './manager.js';
-import { findSession, planTask, runSubagent, shouldBackground } from './subagent.js';
+import { registerCursorTools } from './register-tools.js';
+import {
+  findSession,
+  listInstalledModels,
+  modelFamily,
+  modelRejection,
+  parseModelList,
+  planTask,
+  rejectedModelMessage,
+  runSubagent,
+  shouldBackground,
+  suggestModels,
+} from './subagent.js';
 
 import type { InstalledPlugin } from './manager.js';
+import type { ExtensionAPI, ExtensionToolContext } from '@earendil-works/pi-coding-agent';
 
 function writePstack(home: string): void {
   const root = join(home, 'plugins', 'pstack');
@@ -182,9 +196,7 @@ describe('pstack compatibility', () => {
         catalog.agents,
         catalog.skills,
       );
-      expect('error' in cloud && cloud.error.includes('Respawn with environment "local"')).toBe(
-        true,
-      );
+      expect('error' in cloud && cloud.error.includes('Cursor cloud runtime')).toBe(true);
       const resumed = planTask(
         { ...blankRequest(home), resume: true, sessionId: 'task-missing1' },
         catalog.agents,
@@ -312,7 +324,172 @@ describe('pstack compatibility', () => {
       rmSync(home, { recursive: true, force: true });
     }
   });
+
+  it('names the closest model family and the cloud handoff', async () => {
+    expect(modelFamily('grok-4.7-xhigh-fast')).toBe('grok-4.7');
+    expect(modelFamily('claude-opus-5-5-xhigh')).toBe('claude-opus-5-5');
+    expect(
+      suggestModels('grok-4.7-xhigh-fast', ['grok-4.7-high', 'claude-opus-5-5-xhigh']),
+    ).toEqual(['grok-4.7-high']);
+    expect(rejectedModelMessage('grok-4.7-xhigh-fast', ['grok-4.7-high'])).toContain(
+      'Closest grok-4.7: grok-4.7-high',
+    );
+    expect(modelRejection('auto', ['grok-4.7-high'])).toBeUndefined();
+    expect(modelRejection('grok-4.7-xhigh-fast', [])).toBeUndefined();
+    expect(modelRejection('grok-4.7-xhigh-fast', ['grok-4.7-high'])).toContain('grok-4.7-high');
+    expect(parseModelList('No models available\n')).toEqual([]);
+    expect(parseModelList('cursor/grok-4.7-high\n')).toEqual(['grok-4.7-high']);
+    expect(
+      parseModelList(
+        'provider  model  context\ncursor  grok-4.7-high  200K\nanthropic  claude-opus-5-5-xhigh  200K\n',
+      ),
+    ).toEqual(['grok-4.7-high', 'claude-opus-5-5-xhigh']);
+    expect(await listInstalledModels('auto')).toEqual([]);
+    expect(githubRepoUrl('git@github.com:yu-iskw/pi-cursor-plugin.git')).toBe(
+      'https://github.com/yu-iskw/pi-cursor-plugin',
+    );
+    expect(githubRepoUrl('https://github.com/yu-iskw/pi-cursor-plugin')).toBe(
+      'https://github.com/yu-iskw/pi-cursor-plugin',
+    );
+    expect(githubRepoUrl('https://gitlab.com/yu-iskw/pi-cursor-plugin')).toBeUndefined();
+    expect(wantsCloud('local', 'main', '')).toBe(false);
+    expect(wantsCloud('cloud', undefined, '')).toBe(true);
+    expect(wantsCloud(undefined, 'main', '')).toBe(true);
+    expect(wantsCloud(undefined, undefined, 'bc-agent')).toBe(true);
+    expect(
+      cloudReadiness({ apiKey: undefined, repoUrl: 'https://github.com/yu-iskw/pi-cursor-plugin' }),
+    ).toBeUndefined();
+    expect(
+      cloudReadiness({
+        apiKey: undefined,
+        repoUrl: undefined,
+        environment: 'cloud',
+      }),
+    ).toContain('CURSOR_API_KEY');
+    expect(
+      cloudReadiness({
+        apiKey: 'cursor-key',
+        repoUrl: undefined,
+        environment: 'cloud',
+      }),
+    ).toContain('GitHub origin');
+    expect(
+      cloudReadiness({
+        apiKey: 'cursor-key',
+        repoUrl: 'https://github.com/yu-iskw/pi-cursor-plugin',
+        environment: 'local',
+        baseBranch: 'main',
+      }),
+    ).toContain('environment "cloud"');
+    expect(
+      cloudReadiness({
+        apiKey: 'cursor-key',
+        repoUrl: 'https://github.com/yu-iskw/pi-cursor-plugin',
+        environment: 'pool',
+        baseBranch: 'main',
+      }),
+    ).toContain('Rejected Task environment: pool');
+  });
+
+  it('routes cloud Task to the Cursor runtime and keeps local Task on Pi', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'pstack-task-'));
+    const previousKey = process.env.CURSOR_API_KEY;
+    const previousBin = process.env.PI_BIN;
+    delete process.env.CURSOR_API_KEY;
+    try {
+      writePstack(home);
+      const script = join(home, 'echo.mjs');
+      writeFileSync(
+        script,
+        '#!/usr/bin/env node\nlet data="";process.stdin.setEncoding("utf8");process.stdin.on("data",(c)=>{data+=c});process.stdin.on("end",()=>{process.stdout.write(JSON.stringify({argv:process.argv.slice(2),stdin:data}))});\n',
+      );
+      chmodSync(script, 0o755);
+      process.env.PI_BIN = script;
+      const tools = new Map<string, RegisteredTool>();
+      const pi = {
+        registerTool(tool: RegisteredTool) {
+          tools.set(tool.name, tool);
+        },
+      };
+      registerCursorTools(pi as unknown as ExtensionAPI, () => {}, home);
+      const task = tools.get('Task');
+      if (!task) throw new Error('Task tool was not registered');
+      const ctx = { cwd: home, hasUI: false } as ExtensionToolContext;
+      await expect(
+        task.execute(
+          'cloud',
+          {
+            prompt: 'cover the loader',
+            description: 'swarm',
+            subagent_type: 'generalPurpose',
+            environment: 'cloud',
+            run_in_background: true,
+          },
+          undefined,
+          undefined,
+          ctx,
+        ),
+      ).rejects.toThrow('CURSOR_API_KEY');
+      await expect(
+        task.execute(
+          'local-branch',
+          {
+            prompt: 'cover the loader',
+            description: 'local',
+            subagent_type: 'generalPurpose',
+            environment: 'local',
+            cloud_base_branch: 'main',
+          },
+          undefined,
+          undefined,
+          ctx,
+        ),
+      ).rejects.toThrow('environment "cloud"');
+      const local = await task.execute(
+        'local',
+        {
+          prompt: 'inspect the catalog',
+          description: 'local explore',
+          subagent_type: 'generalPurpose',
+          readonly: true,
+        },
+        undefined,
+        undefined,
+        ctx,
+      );
+      const body = local.content.map((part) => part.text).join('\n');
+      const parsed = JSON.parse(body.slice(body.indexOf('{'))) as { argv: string[]; stdin: string };
+      expect(parsed.argv).toContain('--no-mcp');
+      expect(parsed.argv).toContain('read,grep,find,ls');
+      expect(parsed.stdin).toContain('Parent-provided poteto-mode SKILL.md path:');
+    } finally {
+      if (previousKey === undefined) delete process.env.CURSOR_API_KEY;
+      else process.env.CURSOR_API_KEY = previousKey;
+      if (previousBin === undefined) delete process.env.PI_BIN;
+      else process.env.PI_BIN = previousBin;
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
 });
+
+interface RegisteredTool {
+  name: string;
+  execute: (
+    toolCallId: string,
+    params: {
+      prompt: string;
+      description: string;
+      subagent_type: string;
+      readonly?: boolean;
+      run_in_background?: boolean;
+      environment?: string;
+      cloud_base_branch?: string;
+    },
+    signal: AbortSignal | undefined,
+    onUpdate: undefined,
+    ctx: ExtensionToolContext,
+  ) => Promise<{ content: { type: string; text: string }[] }>;
+}
 
 function blankRequest(cwd: string) {
   return {

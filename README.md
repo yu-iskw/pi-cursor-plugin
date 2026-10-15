@@ -6,7 +6,7 @@ A Pi extension that installs Cursor plugins and runs pstack with Pi's skill load
 
 Targets Pi coding agent 1.2.0 (`@earendil-works/pi-coding-agent`). pstack skills keep their frontmatter and are available under the Cursor slash names (`/poteto-mode`, `/how`, `/setup-pstack`). `poteto-agent` and `comment-sicko` run through the `Task` tool. `poteto-agent` starts in the background, and `Task` `resume` continues its Pi session. `AskQuestion` and `TodoWrite` use those Cursor tool names. `alwaysApply` rules, including the file written by `/setup-pstack`, are added to the system prompt. A skill with `paths` is inlined when the prompt names a matching file.
 
-`Task` `environment: "cloud"` returns an error so the caller can respawn with `environment: "local"`. Readonly subagents pass `--no-mcp`. A non-readonly child keeps MCP servers configured for Pi. Hooks are not executed. pstack does not ship hooks or its own MCP servers.
+`Task` `environment: "cloud"` starts a Cursor cloud agent when `CURSOR_API_KEY` is set and the checkout has a GitHub `origin`. A missing key or origin returns an error so the caller can respawn with `environment: "local"`. `cloud_base_branch` selects the cloud starting ref, and a `bc-` agent id resumes that cloud agent. A rejected model slug lists the closest slugs of the same family. Readonly local subagents pass `--no-mcp`. A non-readonly child keeps MCP servers configured for Pi. Hooks are not executed. pstack does not ship hooks or its own MCP servers.
 
 ## Install
 

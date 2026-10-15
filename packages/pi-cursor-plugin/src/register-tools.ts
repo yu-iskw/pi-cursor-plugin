@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { Type } from 'typebox';
 
 import { loadCatalog } from './catalog.js';
+import { startCloudTask, wantsCloud } from './cloud-task.js';
 import {
   applyTodos,
   formatAskWithoutUi,
@@ -15,12 +16,15 @@ import { storeRoot } from './manager.js';
 import {
   boundOutput,
   currentTaskDepth,
+  listInstalledModels,
+  modelRejection,
   planTask,
   runSubagent,
   shouldBackground,
 } from './subagent.js';
 import { createTaskBoard } from './task-board.js';
 
+import type { AgentRecord } from './catalog.js';
 import type { AskQuestion, TodoItem } from './cursor-actions.js';
 import type { SubagentLaunch, SubagentOutput } from './subagent.js';
 import type { TaskRecord } from './task-board.js';
@@ -91,13 +95,13 @@ export function registerCursorTools(
     name: 'Task',
     label: 'Task',
     description:
-      'Cursor Task tool. Spawn a pstack subagent (poteto-agent, comment-sicko, or generalPurpose) and return its report. Omit model or pass auto or inherit-parent to use the parent Pi model. environment "cloud" is rejected; respawn with "local". resume continues a Pi session for that agent id.',
+      'Cursor Task tool. Spawn a pstack subagent (poteto-agent, comment-sicko, or generalPurpose) and return its report. Omit model or pass auto or inherit-parent to use the parent Pi model. environment "cloud" starts a Cursor cloud agent. resume continues that agent id.',
     promptSnippet: 'Spawn a Cursor-style subagent',
     promptGuidelines: [
       'Use the Task tool for pstack subagents. subagent_type poteto-agent, comment-sicko, or generalPurpose.',
       'Pass readonly true for read-only exploration. poteto-agent runs in the background unless run_in_background is false.',
       'Pass resume with an agent id only when the same checkout or process must continue. A missing session is an error.',
-      "A rejected model slug or cloud environment is an error from this tool; follow the skill's fallback.",
+      'environment "cloud" starts a Cursor cloud agent when CURSOR_API_KEY and a GitHub origin are set. A rejected model slug includes the closest slugs of that family.',
     ],
     parameters: Type.Object({
       prompt: Type.String({ description: 'Full task for the subagent' }),
@@ -110,7 +114,7 @@ export function registerCursorTools(
         Type.String({ description: 'Agent id returned by an earlier Task call' }),
       ),
       environment: Type.Optional(
-        Type.String({ description: 'local or cloud. cloud is rejected in Pi.' }),
+        Type.String({ description: 'local or cloud. cloud starts a Cursor cloud agent.' }),
       ),
       cloud_base_branch: Type.Optional(Type.String()),
     }),
@@ -262,6 +266,17 @@ async function executeTask(
 ): Promise<AgentToolResult<ToolDetails>> {
   const catalog = loadCatalog(runtime.home);
   const resume = params.resume?.trim() ?? '';
+  if (
+    params.environment === 'local' &&
+    (params.cloud_base_branch?.trim() || resume.startsWith('bc-'))
+  ) {
+    throw new Error('cloud_base_branch and cloud agent ids apply to environment "cloud".');
+  }
+  if (wantsCloud(params.environment, params.cloud_base_branch, resume)) {
+    return runCloud(params, catalog.agents, ctx.cwd, runtime);
+  }
+  const rejectedModel = modelRejection(params.model, await listInstalledModels(params.model));
+  if (rejectedModel) throw new Error(rejectedModel);
   const id = resume || taskId();
   const agent = catalog.agents.find((entry) => entry.name === params.subagent_type);
   const plan = planTask(
@@ -291,6 +306,71 @@ async function executeTask(
     );
   }
   return finishTask(id, params.description, plan.launch, signal, runtime.home);
+}
+
+async function runCloud(
+  params: {
+    prompt: string;
+    description: string;
+    subagent_type: string;
+    model?: string;
+    readonly?: boolean;
+    run_in_background?: boolean;
+    resume?: string;
+    environment?: string;
+    cloud_base_branch?: string;
+  },
+  agents: readonly AgentRecord[],
+  cwd: string,
+  runtime: TaskRuntime,
+): Promise<AgentToolResult<ToolDetails>> {
+  const resume = params.resume?.trim() ?? '';
+  const agent = agents.find((entry) => entry.name === params.subagent_type);
+  const started = await startCloudTask({
+    prompt: params.prompt,
+    model: params.model,
+    readonly: params.readonly === true,
+    cwd,
+    environment: params.environment,
+    baseBranch: params.cloud_base_branch,
+    resumeId: resume.startsWith('bc-') ? resume : undefined,
+  });
+  const background = shouldBackground(params.run_in_background, agent?.isBackground === true);
+  if (background) {
+    runtime.board.put({
+      id: started.agentId,
+      description: params.description,
+      status: 'running',
+      output: '',
+    });
+    void started.done
+      .then((result) => {
+        const status = result.failed ? 'error' : 'done';
+        runtime.board.update(started.agentId, { status, output: result.text });
+        try {
+          runtime.deliver(
+            `Background ${status} ${started.agentId} (${params.description})\n\n${result.text}`,
+          );
+        } catch (error) {
+          const deliveryError = error instanceof Error ? error.message : String(error);
+          runtime.board.update(started.agentId, { deliveryError });
+        }
+      })
+      .catch((error: unknown) => {
+        const output = error instanceof Error ? error.message : String(error);
+        runtime.board.update(started.agentId, { status: 'error', output });
+      });
+    return textResult(
+      `Started background cloud agent ${started.agentId} (${params.description}). Resume this agent with Task resume set to ${started.agentId}.`,
+      { kind: 'task', id: started.agentId },
+    );
+  }
+  const result = await started.done;
+  return textResult(
+    `Agent id: ${started.agentId}\n${params.description}\n${result.text}`,
+    { kind: 'task', id: started.agentId },
+    result.failed,
+  );
 }
 
 function startBackground(

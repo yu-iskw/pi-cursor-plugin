@@ -10,8 +10,8 @@ const INHERITED_MODELS = new Set(['auto', 'inherit-parent']);
 const MODEL_SLUG = /^[A-Za-z0-9_.:/@+-]+$/;
 const READONLY_TOOLS = 'read,grep,find,ls';
 
-const CLOUD_UNAVAILABLE =
-  'Cursor cloud Task workers are not available in Pi. Respawn with environment "local". cloud_base_branch needs a cloud VM, which Pi does not provide.';
+const CLOUD_HANDOFF = 'Cloud Task requests are handled by the Cursor cloud runtime.';
+const EFFORT_TOKENS = new Set(['max', 'xhigh', 'high', 'medium', 'low', 'minimal', 'fast']);
 function isAlphanumeric(char: string): boolean {
   return (
     (char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z') || (char >= '0' && char <= '9')
@@ -130,9 +130,94 @@ function taskPrompt(
   return lines.join('\n\n');
 }
 
+export function modelFamily(slug: string): string {
+  const parts = slug.split('-');
+  while (parts.length > 1 && EFFORT_TOKENS.has(parts[parts.length - 1] ?? '')) parts.pop();
+  return parts.join('-');
+}
+
+export function suggestModels(slug: string, available: readonly string[]): string[] {
+  const family = modelFamily(slug);
+  return available.filter((item) => item !== slug && modelFamily(item) === family);
+}
+
+export function rejectedModelMessage(slug: string, available: readonly string[]): string {
+  const suggestions = suggestModels(slug, available);
+  const listed = suggestions.length > 0 ? suggestions.join(', ') : 'none';
+  return `Rejected model slug: ${slug}. Closest ${modelFamily(slug)}: ${listed}.`;
+}
+
+export function parseModelList(text: string): string[] {
+  if (text.includes('No models available')) return [];
+  const found: string[] = [];
+  for (const line of text.split('\n')) {
+    const columns = line.trim().split(/\s{2,}/);
+    const cell = columns.length >= 2 ? columns[1] : columns[0];
+    const token = cell.trim();
+    if (!token || token === 'model') continue;
+    const slug = token.includes('/') ? token.slice(token.lastIndexOf('/') + 1) : token;
+    if (MODEL_SLUG.test(slug) && !found.includes(slug)) found.push(slug);
+  }
+  return found;
+}
+
+function concreteModel(slug: string | undefined): string | undefined {
+  const value = slug?.trim();
+  if (!value || INHERITED_MODELS.has(value)) return undefined;
+  if (value.startsWith('-') || !MODEL_SLUG.test(value)) return undefined;
+  return value;
+}
+
+export function modelRejection(
+  slug: string | undefined,
+  available: readonly string[],
+): string | undefined {
+  const value = concreteModel(slug);
+  if (!value || available.length === 0 || available.includes(value)) return undefined;
+  return rejectedModelMessage(value, available);
+}
+
+let cachedModels: readonly string[] | undefined;
+
+export function listInstalledModels(slug: string | undefined): Promise<readonly string[]> {
+  if (!concreteModel(slug)) return Promise.resolve([]);
+  if (cachedModels && cachedModels.length > 0) return Promise.resolve(cachedModels);
+  return readPiModels();
+}
+
+function readPiModels(): Promise<readonly string[]> {
+  return new Promise((resolve) => {
+    const child = spawn('pi', ['--list-models'], { stdio: ['ignore', 'pipe', 'pipe'] });
+    let text = '';
+    let settled = false;
+    const timer = setTimeout(() => {
+      child.kill('SIGTERM');
+    }, 15000);
+    const finish = (models: readonly string[]): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (models.length > 0) cachedModels = models;
+      resolve(models);
+    };
+    child.stdout.on('data', (chunk: Buffer) => {
+      text += chunk.toString('utf8');
+    });
+    child.stderr.on('data', (chunk: Buffer) => {
+      text += chunk.toString('utf8');
+    });
+    child.on('error', () => {
+      finish([]);
+    });
+    child.on('close', () => {
+      finish(parseModelList(text));
+    });
+  });
+}
+
 function cloudError(request: TaskRequest): string | undefined {
   const branch = request.cloudBaseBranch?.trim();
-  if (request.environment === 'cloud' || branch) return CLOUD_UNAVAILABLE;
+  if (request.environment === 'cloud' || branch) return CLOUD_HANDOFF;
   if (request.environment && request.environment !== 'local') {
     return `Rejected Task environment: ${request.environment}`;
   }
