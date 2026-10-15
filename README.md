@@ -1,62 +1,40 @@
-# {PROJECT_NAME}
+# Pi Cursor Plugin Manager
 
-{PROJECT_DESCRIPTION}
+A native Pi extension for installing and inspecting Cursor plugin packages without modifying upstream sources.
 
-## Getting Started
+## Status
 
-### Prerequisites
+Experimental. Supports GitHub package installation, version pinning to an installed commit, registry, enable/disable, marketplace source aliases, and skill command registration. **Not** a complete implementation of Cursor's runtime. Hooks, MCP processes, rule activation, and Cursor-specific subagent orchestration are not executed.
 
-- [pnpm](https://pnpm.io/) **11.x** (see `packageManager` in `package.json`; use [Corepack](https://nodejs.org/api/corepack.html): `corepack enable`)
-- Node.js **22+** (see `engines` in `package.json`; `.node-version` pins the version used for local dev and CI)
-
-Dependency installs follow pnpm 11 supply-chain settings in [`pnpm-workspace.yaml`](pnpm-workspace.yaml): **minimum release age** (this template uses a **7-day** quarantine, stricter than pnpm’s built-in 24-hour default), **blocking exotic transitive dependencies**, and an **`allowBuilds`** allowlist for packages that run install scripts. See [pnpm 11 release notes](https://pnpm.io/blog/releases/11.0) and [Supply-chain defaults (Socket)](https://socket.dev/blog/pnpm-11-adds-new-supply-chain-protection-defaults).
-
-Linting and formatting use [Trunk](https://trunk.io/) (ESLint, Prettier, and more). The Trunk **launcher** is installed with project dependencies—you do not need a separate Trunk install for the default workflow.
-
-### Installation
+## Install
 
 ```bash
 pnpm install
+pnpm --filter @yu-iskw/pi-cursor-plugin build
+pi install ./packages/pi-cursor-plugin
 ```
 
-Optional: prefetch Trunk’s hermetic tools (helpful for offline work or CI images):
+## Usage
 
-```bash
-pnpm exec trunk install
+```text
+/cursor-plugin marketplace add github:cursor/plugins official
+/cursor-plugin install pstack
+/cursor-plugin install official:thermos
+/cursor-plugin install github:cursor/plugins/cursor-team-kit
+/cursor-plugin list
+/cursor-plugin skills
+/cursor-plugin inspect pstack
+/cursor-plugin doctor thermos
+/cursor-plugin disable thermos
+/cursor-plugin enable thermos
+/cursor-plugin update pstack
+/cursor-plugin uninstall thermos
 ```
 
-If you prefer a global `trunk` on your PATH, see the [Trunk installation guide](https://docs.trunk.io/references/cli/getting-started/install) (e.g. `brew install trunk-io` on macOS).
+After installation, run `/reload` to register skill commands, for example `/cursor-pstack-skill-name task`.
 
-### Supply-chain protections
+## Security and limitations
 
-The template uses **pnpm 11** with settings in [`pnpm-workspace.yaml`](pnpm-workspace.yaml): a **7-day** [`minimumReleaseAge`](https://pnpm.io/settings#minimumreleaseage) (10080 minutes, stricter than pnpm’s default 1 day), [`blockExoticSubdeps`](https://pnpm.io/settings#blockexoticsubdeps) enabled, and an [`allowBuilds`](https://pnpm.io/settings#allowbuilds) map for dependencies that must run install scripts (pnpm 11 requires this for native toolchain packages such as esbuild). See the [pnpm 11 release notes](https://pnpm.io/blog/releases/11.0).
+Installing a package downloads source using git but does not run plugin-provided install scripts. Do not enable untrusted plugin instructions without reviewing them. No hooks or MCP servers are executed automatically. GitHub URLs are limited to public GitHub source. Marketplace aliases map to repository roots, not Cursor's hosted marketplace protocol. Relative components are discovered as read-only files. Cursor runtime parity is **not established**.
 
-CI: pull requests and `main` run `pnpm lint:security` then generate/scan an SPDX SBOM (`.github/workflows/sbom.yml`). Publish re-checks `pnpm lint:security` before npm publish.
-
-### Build
-
-```bash
-pnpm build
-```
-
-### Test
-
-```bash
-pnpm test
-```
-
-### Linting & Formatting
-
-```bash
-pnpm lint
-pnpm format
-```
-
-## Project Structure
-
-- `packages/`: Monorepo packages
-  - `common/`: Shared utilities and types
-
-## License
-
-{LICENSE}
+Review the `AGENTS.md` instructions in this repository before developing changes. Run `pnpm test`, `pnpm build`, and `pnpm lint` for validation.
