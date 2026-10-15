@@ -14,6 +14,7 @@ import { dispatchCursorPlugin } from './commands.js';
 import { formatTodoMessage } from './cursor-actions.js';
 import { storeRoot } from './manager.js';
 import {
+  agentMcpConfig,
   cursorMcpServers,
   formatMcpMessage,
   mcpCatalogDir,
@@ -252,7 +253,7 @@ function registerServer(
 ): boolean {
   if (registered.has(server.name)) return true;
   try {
-    pi.registerMcpServer(server.name, server.config);
+    pi.registerMcpServer(server.name, agentMcpConfig(server));
     registered.add(server.name);
     return true;
   } catch (error) {

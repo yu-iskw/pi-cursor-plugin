@@ -44,6 +44,7 @@ import {
 import { frontmatterList, parseFrontmatter } from './frontmatter.js';
 import { git, loadRegistry, saveRegistry } from './manager.js';
 import {
+  agentMcpConfig,
   cursorMcpServers,
   formatMcpMessage,
   mcpCatalogDir,
@@ -1258,6 +1259,35 @@ describe('pstack review follow-ups', () => {
     } finally {
       rmSync(home, { recursive: true, force: true });
     }
+  });
+
+  it('exposes Cursor MCP tools directly so /why can call them', () => {
+    const notes = {
+      name: 'notes',
+      description: 'Notes',
+      config: { command: 'node', args: ['notes.mjs'], env: { TOKEN: 'secret' } },
+    };
+    expect(agentMcpConfig(notes)).toEqual({
+      command: 'node',
+      args: ['notes.mjs'],
+      env: { TOKEN: 'secret' },
+      exposure: 'direct',
+    });
+    expect(
+      agentMcpConfig({
+        name: 'slack',
+        description: 'Chat',
+        config: { url: 'https://example.test/mcp', headers: { authorization: 'Bearer t' } },
+      }),
+    ).toEqual({
+      url: 'https://example.test/mcp',
+      headers: { authorization: 'Bearer t' },
+      exposure: 'direct',
+    });
+    const message = formatMcpMessage('/mcps', [notes]);
+    expect(message).toContain('mcp__<server>__<tool>');
+    expect(message).toContain('read_mcp_resource');
+    expect(message).toContain('list_mcp_resource_templates');
   });
 
   it('links installed skills under .cursor/plugins for /reflect', () => {

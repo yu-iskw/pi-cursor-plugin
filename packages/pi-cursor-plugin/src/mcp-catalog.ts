@@ -5,6 +5,8 @@ import { join } from 'node:path';
 import { loadRegistry, safeJoin } from './manager.js';
 import { projectSlug } from './workspace-context.js';
 
+import type { McpServerConfig } from '@earendil-works/pi-coding-agent';
+
 export interface CursorMcpServer {
   name: string;
   description: string;
@@ -47,6 +49,10 @@ export function mcpToolDescriptor(tool: unknown): McpToolDescriptor | undefined 
     description: typeof description === 'string' && description.trim() ? description.trim() : name,
     parameters,
   };
+}
+
+export function agentMcpConfig(server: CursorMcpServer): McpServerConfig {
+  return { ...server.config, exposure: 'direct' };
 }
 
 export function mcpCatalogDir(cwd: string, homeDir = homedir()): string {
@@ -137,6 +143,8 @@ export function formatMcpMessage(
     MCP_HEADING,
     '',
     'These are the enabled MCP servers. A readonly Task passes --no-mcp and cannot call them.',
+    'Call a server tool directly. Its Pi name is mcp__<server>__<tool>, using the tool name from that server tools directory.',
+    'Read a listed resource with list_mcp_resources, list_mcp_resource_templates, or read_mcp_resource.',
     `Inspect \`${directory}\` for server metadata and each server's tools and resources directories.`,
     lines.join('\n'),
   ].join('\n');
