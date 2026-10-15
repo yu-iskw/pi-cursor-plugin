@@ -14,13 +14,13 @@ import { cursorMcpServers } from './mcp-catalog.js';
 
 import type { InstalledPlugin } from './manager.js';
 
-export interface CommandContext {
+interface CommandContext {
   home: string;
   cwd: string;
   userRulesDir: string;
 }
 
-export interface DispatchResult {
+interface DispatchResult {
   message: string;
   reload: boolean;
 }

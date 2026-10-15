@@ -35,12 +35,12 @@ export interface InstalledPlugin {
   enabled: boolean;
   installedAt: string;
 }
-export interface PluginRegistry {
+interface PluginRegistry {
   schemaVersion: 1;
   plugins: Record<string, InstalledPlugin>;
   marketplaces: Record<string, string>;
 }
-export interface PluginCapability {
+interface PluginCapability {
   name: string;
   available: boolean;
   detail: string;
@@ -77,6 +77,30 @@ export function safeJoin(root: string, part: string): string {
     throw new Error('Path escapes plugin root');
   return target;
 }
+const MANIFEST_PATHS = ['skills', 'agents', 'rules', 'commands', 'hooks', 'mcpServers'] as const;
+type ManifestPath = (typeof MANIFEST_PATHS)[number];
+
+function manifestField(manifest: PluginManifest, property: ManifestPath): unknown {
+  switch (property) {
+    case 'skills':
+      return manifest.skills;
+    case 'agents':
+      return manifest.agents;
+    case 'rules':
+      return manifest.rules;
+    case 'commands':
+      return manifest.commands;
+    case 'hooks':
+      return manifest.hooks;
+    case 'mcpServers':
+      return manifest.mcpServers;
+    default: {
+      const unexpected: never = property;
+      return unexpected;
+    }
+  }
+}
+
 export function readManifest(root: string): { format: PluginFormat; manifest: PluginManifest } {
   const cursor = join(root, '.cursor-plugin', 'plugin.json');
   const agent = join(root, 'plugin.json');
@@ -88,15 +112,9 @@ export function readManifest(root: string): { format: PluginFormat; manifest: Pl
   const manifest = obj as PluginManifest;
   if (typeof manifest.name !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(manifest.name))
     throw new Error('Invalid plugin name');
-  for (const property of [
-    'skills',
-    'agents',
-    'rules',
-    'commands',
-    'hooks',
-    'mcpServers',
-  ] as const) {
-    if (manifest[property] !== undefined && typeof manifest[property] !== 'string')
+  for (const property of MANIFEST_PATHS) {
+    const value = manifestField(manifest, property);
+    if (value !== undefined && typeof value !== 'string')
       throw new Error('Unsupported ' + property + ' manifest field');
   }
   return { format: file === cursor ? 'cursor' : 'agent', manifest };
@@ -106,7 +124,7 @@ export function componentPaths(
   manifest: PluginManifest,
   key: 'skills' | 'agents' | 'rules' | 'commands',
 ): string[] {
-  const configured = manifest[key];
+  const configured = manifestField(manifest, key);
   const directory = safeJoin(root, typeof configured === 'string' ? configured : key);
   if (!existsSync(directory)) return [];
   const results: string[] = [];
@@ -133,8 +151,10 @@ export function parseSource(input: string): { repo: string; subdir: string; ref?
   const parts = github.split('/').filter(Boolean);
   if (parts.length < 2 || !parts.slice(0, 2).every((x) => /^[\w.-]+$/.test(x)))
     throw new Error('Expected github:owner/repo[/plugin] or GitHub URL');
-  if (parts[2] === 'tree' && parts.length >= 4)
-    return { repo: parts.slice(0, 2).join('/'), ref: parts[3], subdir: parts.slice(4).join('/') };
+  const kind = parts.at(2);
+  const gitRef = parts.at(3);
+  if (kind === 'tree' && gitRef && parts.length >= 4)
+    return { repo: parts.slice(0, 2).join('/'), ref: gitRef, subdir: parts.slice(4).join('/') };
   return { repo: parts.slice(0, 2).join('/'), subdir: parts.slice(2).join('/') };
 }
 export function git(args: string[], cwd?: string): string {
@@ -180,7 +200,7 @@ export function install(source: string, home = storeRoot()): InstalledPlugin {
       enabled: true,
       installedAt: new Date().toISOString(),
     };
-    registry.plugins[manifest.name] = entry;
+    Reflect.set(registry.plugins, manifest.name, entry);
     saveRegistry(registry, home);
     return entry;
   } finally {
@@ -212,7 +232,7 @@ export function uninstall(name: string, home = storeRoot()): void {
   const registry = loadRegistry(home);
   const plugin = requirePlugin(registry, name);
   rmSync(join(home, 'plugins', plugin.name), { recursive: true, force: true });
-  delete registry.plugins[plugin.name];
+  Reflect.deleteProperty(registry.plugins, plugin.name);
   saveRegistry(registry, home);
 }
 export function setEnabled(name: string, enabled: boolean, home = storeRoot()): void {
@@ -257,16 +277,17 @@ export function addMarketplace(name: string, source: string, home = storeRoot())
   if (!/^[\w.-]+$/.test(name)) throw new Error('Invalid marketplace name');
   parseSource(source);
   const registry = loadRegistry(home);
-  registry.marketplaces[name] = source;
+  Reflect.set(registry.marketplaces, name, source);
   saveRegistry(registry, home);
 }
 export function resolvePlugin(name: string, home = storeRoot()): string {
   if (name.startsWith('github:') || name.startsWith('https://github.com/')) return name;
   const markets = loadRegistry(home).marketplaces;
-  const [market, plugin] = name.includes(':')
-    ? name.split(':', 2)
-    : [Object.keys(markets)[0], name];
-  if (!market || !markets[market] || !plugin)
+  const split = name.split(':', 2);
+  const market = name.includes(':') ? split.at(0) : Object.keys(markets).at(0);
+  const plugin = name.includes(':') ? split.at(1) : name;
+  const marketSource = market ? Reflect.get(markets, market) : undefined;
+  if (!market || typeof marketSource !== 'string' || !plugin)
     throw new Error('Plugin name requires configured marketplace, or use github:owner/repo/plugin');
-  return markets[market].replace(/\/$/, '') + '/' + plugin;
+  return marketSource.replace(/\/$/, '') + '/' + plugin;
 }

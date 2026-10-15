@@ -32,7 +32,7 @@ export function validSessionId(id: string): boolean {
   return true;
 }
 
-export interface TaskRequest {
+interface TaskRequest {
   prompt: string;
   description: string;
   subagentType: string;
@@ -56,7 +56,7 @@ export interface SubagentLaunch {
   env: NodeJS.ProcessEnv;
 }
 
-export type TaskPlan = { launch: SubagentLaunch } | { error: string };
+type TaskPlan = { launch: SubagentLaunch } | { error: string };
 
 export interface SubagentOutput {
   exitCode: number | null;

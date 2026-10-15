@@ -4,7 +4,7 @@ import { Agent, Cursor, CursorAgentError } from '@cursor/sdk';
 
 import { rejectedModelMessage } from './subagent.js';
 
-export interface CloudTaskInput {
+interface CloudTaskInput {
   prompt: string;
   model?: string;
   readonly: boolean;
@@ -15,7 +15,7 @@ export interface CloudTaskInput {
   parentModelId?: string;
 }
 
-export interface CloudTaskStart {
+interface CloudTaskStart {
   agentId: string;
   done: Promise<{ text: string; failed: boolean }>;
 }

@@ -122,7 +122,7 @@ function writePluginMcp(
   );
   writeFileSync(join(root, 'mcp.json'), JSON.stringify({ mcpServers }));
   const registry = loadRegistry(home);
-  registry.plugins[name] = {
+  Reflect.set(registry.plugins, name, {
     name,
     source: `github:example/${name}`,
     sourcePath: name,
@@ -131,7 +131,7 @@ function writePluginMcp(
     manifest: { name, mcpServers: './mcp.json' },
     enabled,
     installedAt: '2026-10-15T00:00:00.000Z',
-  };
+  });
   saveRegistry(registry, home);
 }
 
@@ -637,9 +637,11 @@ describe('pstack compatibility', () => {
           undefined,
           ctx,
         );
-        return record.content.some(
-          (part) => part.text.startsWith('done ') || part.text.startsWith('error '),
-        );
+        let finished = false;
+        for (const part of record.content) {
+          if (part.text.startsWith('done ') || part.text.startsWith('error ')) finished = true;
+        }
+        return finished;
       }, 'background writer did not finish');
       expect(claimWriter(repo)).toBe(true);
       const reading = await task.execute(

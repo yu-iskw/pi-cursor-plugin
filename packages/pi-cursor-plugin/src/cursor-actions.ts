@@ -40,12 +40,12 @@ export function formatTodos(todos: readonly TodoItem[]): string {
     .join('\n');
 }
 
-export interface AskOption {
+interface AskOption {
   id?: string;
   label: string;
 }
 
-export interface AskQuestionInput {
+interface AskQuestionInput {
   question?: string;
   options?: readonly (string | AskOption)[];
   allow_multiple?: boolean;

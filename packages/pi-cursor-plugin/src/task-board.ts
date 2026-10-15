@@ -6,7 +6,7 @@ export interface TaskRecord {
   deliveryError?: string;
 }
 
-export interface TaskBoard {
+interface TaskBoard {
   put(record: TaskRecord): void;
   update(id: string, patch: Partial<Omit<TaskRecord, 'id'>>): TaskRecord | undefined;
   get(id: string): TaskRecord | undefined;

@@ -1,0 +1,4 @@
+[[IgnoredVulns]]
+id = "GHSA-vfj7-8cjw-p6xm"
+ignoreUntil = 2027-01-15T00:00:00Z
+reason = "braces 3.0.3 is the newest npm release and OSV marks every version last_affected. It is only reached through micromatch and fast-glob."

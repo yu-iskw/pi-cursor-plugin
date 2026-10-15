@@ -1,6 +1,6 @@
-export type FrontmatterValue = string | boolean | string[];
+type FrontmatterValue = string | boolean | string[];
 
-export interface Frontmatter {
+interface Frontmatter {
   data: Map<string, FrontmatterValue>;
   body: string;
 }
@@ -30,6 +30,10 @@ function parseScalar(raw: string): FrontmatterValue {
 
 const BLOCK_MARKERS = new Set(['>', '>-', '|', '|-']);
 
+function lineAt(lines: readonly string[], index: number): string {
+  return lines.at(index) ?? '';
+}
+
 function readBlock(
   lines: readonly string[],
   start: number,
@@ -37,9 +41,9 @@ function readBlock(
 ): { value: string; next: number } {
   const collected: string[] = [];
   let index = start;
-  while (index + 1 < lines.length && /^\s+\S/.test(lines[index + 1] ?? '')) {
+  while (index + 1 < lines.length && /^\s+\S/.test(lineAt(lines, index + 1))) {
     index += 1;
-    collected.push((lines[index] ?? '').trim());
+    collected.push(lineAt(lines, index).trim());
   }
   const value = marker.startsWith('>') ? collected.join(' ') : collected.join('\n');
   return { value, next: index };
@@ -54,7 +58,7 @@ export function parseFrontmatter(markdown: string): Frontmatter {
   const data = new Map<string, FrontmatterValue>();
   const lines = markdown.slice(4, end).split(/\r?\n/);
   for (let index = 0; index < lines.length; index += 1) {
-    const match = /^([A-Za-z0-9_-]+):\s*(.*)$/.exec(lines[index] ?? '');
+    const match = /^([A-Za-z0-9_-]+):\s*(.*)$/.exec(lineAt(lines, index));
     if (!match?.[1]) continue;
     const raw = match[2];
     if (BLOCK_MARKERS.has(raw)) {

@@ -183,7 +183,7 @@ function stringRecord(value: unknown): Record<string, string> | undefined {
   for (const key of Object.keys(value)) {
     const item: unknown = Reflect.get(value, key);
     if (typeof item !== 'string') return undefined;
-    result[key] = item;
+    Reflect.set(result, key, item);
   }
   return result;
 }

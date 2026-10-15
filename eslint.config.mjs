@@ -199,6 +199,13 @@ export default [
     },
   },
   {
+    files: ['packages/pi-cursor-plugin/**/*.ts'],
+    rules: {
+      // Store, git, and temp paths are chosen at runtime and checked before use.
+      'security/detect-non-literal-fs-filename': 'off',
+    },
+  },
+  {
     files: ['**/*.js'],
     ignores: ['**/dist/**', '**/node_modules/**', '**/coverage/**'],
     languageOptions: {

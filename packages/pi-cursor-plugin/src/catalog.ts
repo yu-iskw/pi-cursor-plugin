@@ -34,7 +34,7 @@ export interface AgentRecord {
   isBackground: boolean;
 }
 
-export interface RuleRecord {
+interface RuleRecord {
   path: string;
   description: string;
   alwaysApply: boolean;
@@ -42,7 +42,7 @@ export interface RuleRecord {
   body: string;
 }
 
-export interface Catalog {
+interface Catalog {
   skills: SkillRecord[];
   agents: AgentRecord[];
   skillPaths: string[];

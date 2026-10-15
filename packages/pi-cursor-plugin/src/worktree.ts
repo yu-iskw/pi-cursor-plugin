@@ -19,7 +19,7 @@ export function releaseWriter(cwd: string): void {
   else writers.set(cwd, current - 1);
 }
 
-export function worktreeRoot(): string {
+function worktreeRoot(): string {
   return process.env.PI_CURSOR_WORKTREE_ROOT?.trim() || join(homedir(), '.cursor', 'worktrees');
 }
 
@@ -28,7 +28,7 @@ export function rememberCheckout(sessionDir: string, id: string, cwd: string): v
   writeFileSync(checkoutFile(sessionDir, id), `${cwd}\n`, { mode: 0o600 });
 }
 
-export function rememberedCheckout(sessionDir: string, id: string): string | undefined {
+function rememberedCheckout(sessionDir: string, id: string): string | undefined {
   const file = checkoutFile(sessionDir, id);
   if (!existsSync(file)) return undefined;
   const value = readFileSync(file, 'utf8').trim();
