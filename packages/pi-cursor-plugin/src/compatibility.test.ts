@@ -1191,6 +1191,68 @@ describe('pstack review follow-ups', () => {
       rmSync(home, { recursive: true, force: true });
     }
   });
+
+  it('names Cursor tools in the transcript /reflect reads', () => {
+    const home = mkdtempSync(join(tmpdir(), 'pstack-tool-transcript-'));
+    try {
+      const session = join(home, 'session.jsonl');
+      writeFileSync(
+        session,
+        [
+          JSON.stringify({
+            type: 'message',
+            message: {
+              role: 'assistant',
+              content: [
+                { type: 'toolCall', name: 'read', arguments: { path: 'skills/why/SKILL.md' } },
+                { type: 'toolCall', name: 'bash', arguments: { command: 'git log' } },
+                {
+                  type: 'toolCall',
+                  name: 'mcp__notes__search_docs',
+                  arguments: { query: 'why' },
+                },
+              ],
+            },
+          }),
+          JSON.stringify({
+            type: 'message',
+            message: {
+              role: 'toolResult',
+              toolName: 'bash',
+              isError: true,
+              content: [{ type: 'text', text: 'exit 1' }],
+            },
+          }),
+          JSON.stringify({
+            type: 'message',
+            message: { role: 'toolResult', toolName: 'read', isError: false, content: [] },
+          }),
+        ].join('\n'),
+      );
+      const written = publishCursorTranscript({
+        cwd: home,
+        sessionId: 'task-reflect01',
+        sessionFile: session,
+        homeDir: home,
+      });
+      const text = readFileSync(written ?? '', 'utf8')
+        .trim()
+        .split('\n')
+        .map((line) => {
+          const parsed = JSON.parse(line) as { message: { content: { text: string }[] } };
+          return parsed.message.content[0]?.text ?? '';
+        })
+        .join('\n');
+      expect(text).toContain('tool Read {"path":"skills/why/SKILL.md"}');
+      expect(text).toContain('tool Shell {"command":"git log"}');
+      expect(text).toContain('tool MCP notes search_docs {"query":"why"}');
+      expect(text).toContain('tool result Shell failed: exit 1');
+      expect(text).toContain('tool result Read');
+      expect(text).not.toContain('tool result Read failed');
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
 });
 
 interface TodoTool {

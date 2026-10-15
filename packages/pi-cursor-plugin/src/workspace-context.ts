@@ -112,10 +112,48 @@ function cursorLine(entry: unknown): string | undefined {
   if (!message || typeof message !== 'object') return undefined;
   const role: unknown = Reflect.get(message, 'role');
   if (role !== 'user' && role !== 'assistant' && role !== 'toolResult') return undefined;
-  const content: unknown = Reflect.get(message, 'content');
-  const text = contentText(content);
+  const text =
+    role === 'toolResult' ? toolResultText(message) : contentText(Reflect.get(message, 'content'));
   if (!text.trim()) return undefined;
   return JSON.stringify({ role, message: { content: [{ type: 'text', text }] } });
+}
+
+function toolResultText(message: object): string {
+  const body = contentText(Reflect.get(message, 'content')).trim();
+  const toolName: unknown = Reflect.get(message, 'toolName');
+  if (typeof toolName !== 'string' || toolName.length === 0) return body;
+  const name = cursorToolName(toolName);
+  const failed = Reflect.get(message, 'isError') === true ? ' failed' : '';
+  return body.length > 0 ? `tool result ${name}${failed}: ${body}` : `tool result ${name}${failed}`;
+}
+
+function cursorToolName(name: string): string {
+  switch (name) {
+    case 'read':
+      return 'Read';
+    case 'grep':
+      return 'Grep';
+    case 'bash':
+    case 'powershell':
+      return 'Shell';
+    case 'find':
+      return 'Glob';
+    case 'edit':
+      return 'StrReplace';
+    case 'write':
+      return 'Write';
+    case 'ls':
+      return 'LS';
+    default:
+      return mcpToolLabel(name);
+  }
+}
+
+function mcpToolLabel(name: string): string {
+  const match = /^mcp__(.+?)__(.+)$/.exec(name);
+  const server = match?.[1];
+  const tool = match?.[2];
+  return server && tool ? `MCP ${server} ${tool}` : name;
 }
 
 function contentText(content: unknown): string {
@@ -137,7 +175,7 @@ function textFromBlock(block: unknown): string {
   const fallback: unknown = Reflect.get(block, 'input');
   const args = named ?? fallback;
   const rendered = typeof args === 'string' ? args : JSON.stringify(args ?? {});
-  return `tool ${name} ${rendered}`;
+  return `tool ${cursorToolName(name)} ${rendered}`;
 }
 
 function withPrompt(lines: string[], prompt: string | undefined): string[] {
