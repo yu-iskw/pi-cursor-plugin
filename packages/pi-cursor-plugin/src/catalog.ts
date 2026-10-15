@@ -1,5 +1,14 @@
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
-import { basename, dirname, join } from 'node:path';
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  readlinkSync,
+  symlinkSync,
+} from 'node:fs';
+import { homedir } from 'node:os';
+import { basename, dirname, join, relative, resolve } from 'node:path';
 
 import {
   cursorCommandName,
@@ -112,13 +121,44 @@ function markdownFiles(directory: string): string[] {
   return results.sort();
 }
 
+function exposePlugin(realRoot: string, name: string, cursorHome: string): string {
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(name)) return realRoot;
+  const link = join(cursorHome, '.cursor', 'plugins', name);
+  const target = resolve(realRoot);
+  if (sameLink(link, target)) return link;
+  if (existsSync(link)) return realRoot;
+  mkdirSync(dirname(link), { recursive: true, mode: 0o700 });
+  try {
+    symlinkSync(target, link);
+  } catch {
+    return sameLink(link, target) ? link : realRoot;
+  }
+  return link;
+}
+
+function sameLink(link: string, target: string): boolean {
+  try {
+    if (!lstatSync(link).isSymbolicLink()) return false;
+    return resolve(dirname(link), readlinkSync(link)) === target;
+  } catch {
+    return false;
+  }
+}
+
+function relocate(realRoot: string, exposedRoot: string, file: string): string {
+  if (exposedRoot === realRoot) return file;
+  const relativePath = relative(realRoot, file);
+  if (relativePath.startsWith('..') || relativePath.startsWith('/')) return file;
+  return join(exposedRoot, relativePath);
+}
+
 function skillDirectory(root: string, manifest: PluginManifest): string | undefined {
   const configured = typeof manifest.skills === 'string' ? manifest.skills : 'skills';
   const directory = safeJoin(root, configured);
   return existsSync(directory) ? directory : undefined;
 }
 
-export function loadCatalog(home = storeRoot()): Catalog {
+export function loadCatalog(home = storeRoot(), cursorHome = homedir()): Catalog {
   const skills: SkillRecord[] = [];
   const agents: AgentRecord[] = [];
   const skillPaths: string[] = [];
@@ -127,15 +167,20 @@ export function loadCatalog(home = storeRoot()): Catalog {
     if (!entry.enabled) continue;
     const root = join(home, 'plugins', entry.name);
     if (!existsSync(root)) continue;
+    const exposed = exposePlugin(root, entry.name, cursorHome);
     const directory = skillDirectory(root, entry.manifest);
-    if (directory) skillPaths.push(directory);
+    if (directory) skillPaths.push(relocate(root, exposed, directory));
     for (const file of componentPaths(root, entry.manifest, 'skills')) {
-      skills.push(skillRecord(entry.name, file));
+      skills.push(skillRecord(entry.name, relocate(root, exposed, file)));
     }
     for (const file of componentPaths(root, entry.manifest, 'agents')) {
-      agents.push(agentRecord(entry.name, file));
+      agents.push(agentRecord(entry.name, relocate(root, exposed, file)));
     }
-    promptPaths.push(...componentPaths(root, entry.manifest, 'commands'));
+    promptPaths.push(
+      ...componentPaths(root, entry.manifest, 'commands').map((file) =>
+        relocate(root, exposed, file),
+      ),
+    );
   }
   skills.sort((left, right) => left.commandName.localeCompare(right.commandName));
   agents.sort((left, right) => left.name.localeCompare(right.name));

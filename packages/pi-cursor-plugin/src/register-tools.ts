@@ -152,7 +152,7 @@ export function registerCursorTools(
       _onUpdate,
       ctx,
     ): Promise<AgentToolResult<ToolDetails>> {
-      return executeTask(params, signal, ctx, { home, board, deliver });
+      return executeTask(params, signal, ctx, { home, cursorHome, board, deliver });
     },
   });
 
@@ -263,6 +263,7 @@ function showTodos(ctx: ExtensionContext, todos: readonly TodoItem[]): void {
 
 interface TaskRuntime {
   home: string;
+  cursorHome: string;
   board: ReturnType<typeof createTaskBoard>;
   deliver: (message: string) => void;
 }
@@ -329,7 +330,7 @@ async function executeTask(
   ctx: ExtensionToolContext,
   runtime: TaskRuntime,
 ): Promise<AgentToolResult<ToolDetails>> {
-  const catalog = loadCatalog(runtime.home);
+  const catalog = loadCatalog(runtime.home, runtime.cursorHome);
   const resume = params.resume?.trim() ?? '';
   const parentModel = parentModelArg(ctx.model, ctx.thinkingLevel);
   if (

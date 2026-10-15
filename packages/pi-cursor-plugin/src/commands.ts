@@ -1,3 +1,4 @@
+import { homedir } from 'node:os';
 import { basename } from 'node:path';
 
 import { formatDoctor, loadCatalog, loadRules } from './catalog.js';
@@ -19,6 +20,7 @@ interface CommandContext {
   cwd: string;
   userRulesDir: string;
   projectTrusted?: boolean;
+  cursorHome?: string;
 }
 
 interface DispatchResult {
@@ -121,7 +123,7 @@ function doctorPlugin(value: string, context: CommandContext): DispatchResult {
   findPlugin(context.home, name);
   const message = formatDoctor(
     name,
-    loadCatalog(context.home),
+    loadCatalog(context.home, context.cursorHome ?? homedir()),
     loadRules({
       home: context.home,
       cwd: context.cwd,
@@ -138,7 +140,7 @@ function doctorPlugin(value: string, context: CommandContext): DispatchResult {
 }
 
 function listSkillCommands(_value: string, context: CommandContext): DispatchResult {
-  const skills = loadCatalog(context.home).skills;
+  const skills = loadCatalog(context.home, context.cursorHome ?? homedir()).skills;
   const message = skills.length
     ? skills
         .map((skill) => {

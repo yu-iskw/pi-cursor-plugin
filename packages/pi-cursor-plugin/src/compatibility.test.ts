@@ -1,6 +1,7 @@
 import {
   chmodSync,
   existsSync,
+  lstatSync,
   mkdtempSync,
   mkdirSync,
   readFileSync,
@@ -155,7 +156,7 @@ describe('pstack compatibility', () => {
     const home = mkdtempSync(join(tmpdir(), 'pstack-catalog-'));
     try {
       writePstack(home);
-      const catalog = loadCatalog(home);
+      const catalog = loadCatalog(home, home);
       const skill = catalog.skills.find((item) => item.commandName === 'poteto-mode');
       if (!skill) throw new Error('missing poteto-mode');
       expect(skill.name).toBe('Poteto Mode');
@@ -194,7 +195,7 @@ describe('pstack compatibility', () => {
         '---\ndescription: ts rule\nglobs: ["**/*.ts"]\n---\nUSE_EXACT_TYPES\n',
       );
       const rules = loadRules({ home, cwd, userRulesDir: userRules });
-      const skills = loadCatalog(home).skills;
+      const skills = loadCatalog(home, home).skills;
       const formatted = formatRuleMessage(rules, skills);
       expect(formatted).toContain('Always use the local marker.');
       expect(formatted).toContain('requestable note');
@@ -219,7 +220,7 @@ describe('pstack compatibility', () => {
     const home = mkdtempSync(join(tmpdir(), 'pstack-plan-'));
     try {
       writePstack(home);
-      const catalog = loadCatalog(home);
+      const catalog = loadCatalog(home, home);
       const plan = planTask(
         {
           prompt: 'Explain the loader',
@@ -286,7 +287,7 @@ describe('pstack compatibility', () => {
     const home = mkdtempSync(join(tmpdir(), 'pstack-run-'));
     try {
       writePstack(home);
-      const catalog = loadCatalog(home);
+      const catalog = loadCatalog(home, home);
       const plan = planTask(
         {
           prompt: 'Read the skill',
@@ -323,6 +324,7 @@ describe('pstack compatibility', () => {
         home,
         cwd: home,
         userRulesDir: join(home, 'empty-rules'),
+        cursorHome: home,
       });
       expect(doctor.message).toContain('display names: poteto-mode → Poteto Mode');
       expect(doctor.message).toContain('agents: comment-sicko, poteto-agent');
@@ -373,7 +375,7 @@ describe('pstack compatibility', () => {
       mkdirSync(sessionDir, { recursive: true });
       writeFileSync(join(sessionDir, 'saved.jsonl'), '{"id":"task-saved01"}\n');
       expect(findSession(sessionDir, 'task-saved01')).toContain('saved.jsonl');
-      const catalog = loadCatalog(home);
+      const catalog = loadCatalog(home, home);
       const resume = planTask(
         {
           ...blankRequest(home),
@@ -505,7 +507,7 @@ describe('pstack compatibility', () => {
           tools.set(tool.name, tool);
         },
       };
-      registerCursorTools(pi as unknown as ExtensionAPI, () => {}, home);
+      registerCursorTools(pi as unknown as ExtensionAPI, () => {}, home, home);
       const task = tools.get('Task');
       if (!task) throw new Error('Task tool was not registered');
       const ctx = { cwd: home, hasUI: false } as ExtensionToolContext;
@@ -620,7 +622,7 @@ describe('pstack compatibility', () => {
           tools.set(tool.name, tool);
         },
       };
-      registerCursorTools(pi as unknown as ExtensionAPI, () => {}, home);
+      registerCursorTools(pi as unknown as ExtensionAPI, () => {}, home, home);
       const task = tools.get('Task');
       if (!task) throw new Error('Task tool was not registered');
       const ctx = { cwd: repo, hasUI: false } as ExtensionToolContext;
@@ -827,6 +829,7 @@ describe('pstack compatibility', () => {
         cwd: home,
         userRulesDir: join(home, 'empty-rules'),
         projectTrusted: true,
+        cursorHome: home,
       });
       expect(doctor.message).toContain('mcp: ');
       expect(doctor.message).toContain('local');
@@ -834,6 +837,7 @@ describe('pstack compatibility', () => {
         home,
         cwd: home,
         userRulesDir: join(home, 'empty-rules'),
+        cursorHome: home,
       });
       expect(untrustedDoctor.message).not.toMatch(/mcp:.*local/);
       expect(doctor.message).toContain('notion');
@@ -900,7 +904,7 @@ describe('pstack review follow-ups', () => {
           tools.set(tool.name, tool);
         },
       };
-      registerCursorTools(pi as unknown as ExtensionAPI, () => {}, home);
+      registerCursorTools(pi as unknown as ExtensionAPI, () => {}, home, home);
       const task = tools.get('Task');
       if (!task) throw new Error('Task tool was not registered');
       const ctx = { cwd: home, hasUI: false } as ExtensionToolContext;
@@ -1251,6 +1255,43 @@ describe('pstack review follow-ups', () => {
       expect(text).not.toContain('tool result Read failed');
     } finally {
       rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('links installed skills under .cursor/plugins for /reflect', () => {
+    const home = mkdtempSync(join(tmpdir(), 'pstack-plugin-link-'));
+    const blocked = mkdtempSync(join(tmpdir(), 'pstack-plugin-blocked-'));
+    try {
+      writePstack(home);
+      const occupied = join(blocked, '.cursor', 'plugins', 'pstack');
+      mkdirSync(occupied, { recursive: true });
+      writeFileSync(join(occupied, 'kept.txt'), 'keep');
+      const blockedCatalog = loadCatalog(home, blocked);
+      expect(blockedCatalog.skillPaths[0]).toBe(join(home, 'plugins', 'pstack', 'skills'));
+      expect(readFileSync(join(occupied, 'kept.txt'), 'utf8')).toBe('keep');
+      const catalog = loadCatalog(home, home);
+      const skill = catalog.skills.find((item) => item.commandName === 'poteto-mode');
+      if (!skill) throw new Error('missing poteto-mode');
+      const linked = join(
+        home,
+        '.cursor',
+        'plugins',
+        'pstack',
+        'skills',
+        'poteto-mode',
+        'SKILL.md',
+      );
+      expect(skill.filePath).toBe(linked);
+      expect(skill.baseDir).toBe(
+        join(home, '.cursor', 'plugins', 'pstack', 'skills', 'poteto-mode'),
+      );
+      expect(catalog.skillPaths).toEqual([join(home, '.cursor', 'plugins', 'pstack', 'skills')]);
+      expect(lstatSync(join(home, '.cursor', 'plugins', 'pstack')).isSymbolicLink()).toBe(true);
+      expect(readFileSync(skill.filePath, 'utf8')).toContain('Follow the playbook.');
+      expect(loadCatalog(home, home).skillPaths).toEqual(catalog.skillPaths);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+      rmSync(blocked, { recursive: true, force: true });
     }
   });
 });
