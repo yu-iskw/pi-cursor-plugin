@@ -8,6 +8,7 @@ import {
   rmSync,
   writeFileSync,
 } from 'node:fs';
+import { createServer, type ServerResponse } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -49,7 +50,7 @@ import {
   mcpToolDescriptor,
   writeMcpCatalog,
 } from './mcp-catalog.js';
-import { listStdioResources } from './mcp-resources.js';
+import { listHttpResources, listStdioResources } from './mcp-resources.js';
 import { registerCursorTools } from './register-tools.js';
 import {
   findSession,
@@ -1331,11 +1332,90 @@ describe('pstack review follow-ups', () => {
           config: { url: 'https://example.test/mcp' },
         }),
       ).resolves.toEqual([]);
+      const notes = await startNotesHttp();
+      try {
+        const httpResources = await listHttpResources({
+          name: 'notes',
+          description: 'Notes',
+          config: { url: notes.url },
+        });
+        expect(httpResources).toEqual([
+          {
+            server: 'notes',
+            uri: 'notes://http-decisions',
+            name: 'http_decisions',
+            description: 'HTTP design notes',
+            mimeType: 'text/markdown',
+          },
+        ]);
+      } finally {
+        await notes.close();
+      }
     } finally {
       rmSync(home, { recursive: true, force: true });
     }
   });
 });
+
+async function startNotesHttp(): Promise<{ url: string; close: () => Promise<void> }> {
+  const http = createServer((request, response) => {
+    const chunks: Buffer[] = [];
+    request.on('data', (chunk: Buffer) => chunks.push(chunk));
+    request.on('end', () => replyNotes(Buffer.concat(chunks).toString('utf8'), response));
+  });
+  await new Promise<void>((resolve) => {
+    http.listen(0, '127.0.0.1', () => resolve());
+  });
+  const address = http.address();
+  if (!address || typeof address === 'string') throw new Error('HTTP test server did not bind');
+  return {
+    url: `http://127.0.0.1:${String(address.port)}/mcp`,
+    close: () =>
+      new Promise((resolve, reject) => {
+        http.close((error) => (error ? reject(error) : resolve()));
+      }),
+  };
+}
+
+function replyNotes(body: string, response: ServerResponse): void {
+  const message: unknown = JSON.parse(body) as unknown;
+  const method: unknown =
+    message && typeof message === 'object' ? Reflect.get(message, 'method') : undefined;
+  if (method === 'initialize') {
+    response.setHeader('mcp-session-id', 'sess-1');
+    response.setHeader('content-type', 'application/json');
+    response.end(
+      JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        result: { protocolVersion: '2024-11-05', capabilities: { resources: {} } },
+      }),
+    );
+    return;
+  }
+  if (method === 'notifications/initialized') {
+    response.statusCode = 202;
+    response.end();
+    return;
+  }
+  response.setHeader('content-type', 'application/json');
+  response.end(
+    JSON.stringify({
+      jsonrpc: '2.0',
+      id: 2,
+      result: {
+        resources: [
+          {
+            uri: 'notes://http-decisions',
+            name: 'http_decisions',
+            description: 'HTTP design notes',
+            mimeType: 'text/markdown',
+          },
+        ],
+      },
+    }),
+  );
+}
 
 const NOTES_MCP = `import readline from 'node:readline';
 const rl = readline.createInterface({ input: process.stdin });

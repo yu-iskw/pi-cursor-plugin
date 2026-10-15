@@ -8,8 +8,25 @@ export async function listedResources(
   servers: readonly CursorMcpServer[],
 ): Promise<McpResourceDescriptor[]> {
   const found: McpResourceDescriptor[] = [];
-  for (const server of servers) found.push(...(await listStdioResources(server)));
+  for (const server of servers) found.push(...(await listServerResources(server)));
   return found;
+}
+
+async function listServerResources(server: CursorMcpServer): Promise<McpResourceDescriptor[]> {
+  if ('command' in server.config) return listStdioResources(server);
+  return listHttpResources(server);
+}
+
+export async function listHttpResources(server: CursorMcpServer): Promise<McpResourceDescriptor[]> {
+  if (!('url' in server.config)) return [];
+  const url = httpUrl(server.config.url);
+  if (!url) return [];
+  try {
+    const result = await requestHttpResources(url, server.config.headers);
+    return resourcesFrom(server.name, result);
+  } catch {
+    return [];
+  }
 }
 
 export async function listStdioResources(
@@ -141,4 +158,106 @@ function resourceDescriptor(server: string, item: unknown): McpResourceDescripto
       : {}),
     ...(typeof mimeType === 'string' && mimeType.trim() ? { mimeType: mimeType.trim() } : {}),
   };
+}
+
+function httpUrl(value: string): string | undefined {
+  try {
+    const url = new URL(value);
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return undefined;
+    return url.toString();
+  } catch {
+    return undefined;
+  }
+}
+
+async function requestHttpResources(
+  url: string,
+  extra: Record<string, string> | undefined,
+): Promise<unknown> {
+  const headers = requestHeaders(extra);
+  const signal = AbortSignal.timeout(LIST_TIMEOUT_MS);
+  const initialized = await postRpc({
+    url,
+    headers,
+    id: 1,
+    method: 'initialize',
+    params: initializeParams(),
+    signal,
+  });
+  if (initialized.sessionId) headers.set('Mcp-Session-Id', initialized.sessionId);
+  await postRpc({ url, headers, method: 'notifications/initialized', signal });
+  const listed = await postRpc({ url, headers, id: 2, method: 'resources/list', signal });
+  return listed.result;
+}
+
+async function postRpc(input: {
+  url: string;
+  headers: Headers;
+  method: string;
+  signal: AbortSignal;
+  id?: number;
+  params?: object;
+}): Promise<{ result: unknown; sessionId?: string }> {
+  const body: { jsonrpc: '2.0'; method: string; id?: number; params?: object } = {
+    jsonrpc: '2.0',
+    method: input.method,
+  };
+  if (input.id !== undefined) body.id = input.id;
+  if (input.params) body.params = input.params;
+  const response = await fetch(input.url, {
+    method: 'POST',
+    headers: input.headers,
+    body: JSON.stringify(body),
+    redirect: 'error',
+    signal: input.signal,
+  });
+  const sessionId = response.headers.get('mcp-session-id') ?? undefined;
+  const text = await response.text();
+  if (input.id === undefined) return { result: undefined, sessionId };
+  return { result: rpcResult(text, response.headers.get('content-type'), input.id), sessionId };
+}
+
+function requestHeaders(extra: Record<string, string> | undefined): Headers {
+  const headers = new Headers({
+    accept: 'application/json, text/event-stream',
+    'content-type': 'application/json',
+  });
+  if (!extra) return headers;
+  for (const key of Object.keys(extra)) {
+    if (!/^[A-Za-z0-9-]+$/.test(key)) continue;
+    const value: unknown = Reflect.get(extra, key);
+    if (typeof value === 'string' && !value.includes('\n') && !value.includes('\r')) {
+      headers.set(key, value);
+    }
+  }
+  return headers;
+}
+
+function rpcResult(body: string, contentType: string | null, id: number): unknown {
+  if (contentType?.includes('text/event-stream')) return sseResult(body, id);
+  return jsonResult(body, id);
+}
+
+function jsonResult(body: string, id: number): unknown {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(body);
+  } catch {
+    return undefined;
+  }
+  if (!parsed || typeof parsed !== 'object' || Reflect.get(parsed, 'id') !== id) return undefined;
+  return Reflect.get(parsed, 'result');
+}
+
+function sseResult(body: string, id: number): unknown {
+  for (const event of body.split('\n\n')) {
+    const data = event
+      .split('\n')
+      .filter((line) => line.startsWith('data:'))
+      .map((line) => line.slice(5).trimStart())
+      .join('\n');
+    const result = data ? jsonResult(data, id) : undefined;
+    if (result !== undefined) return result;
+  }
+  return undefined;
 }
