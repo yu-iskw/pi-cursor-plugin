@@ -22,10 +22,11 @@ export function cursorMcpServers(input: {
   home: string;
   cwd: string;
   userFile?: string;
+  projectTrusted?: boolean;
 }): CursorMcpServer[] {
   const files = [
     input.userFile ?? join(homedir(), '.cursor', 'mcp.json'),
-    join(input.cwd, '.cursor', 'mcp.json'),
+    ...(input.projectTrusted ? [join(input.cwd, '.cursor', 'mcp.json')] : []),
     ...pluginMcpFiles(input.home),
   ];
   const servers = new Map<string, CursorMcpServer>();

@@ -60,14 +60,7 @@ export function parseFrontmatter(markdown: string): Frontmatter {
   for (let index = 0; index < lines.length; index += 1) {
     const match = /^([A-Za-z0-9_-]+):\s*(.*)$/.exec(lineAt(lines, index));
     if (!match?.[1]) continue;
-    const raw = match[2];
-    if (BLOCK_MARKERS.has(raw)) {
-      const block = readBlock(lines, index, raw);
-      data.set(match[1], block.value);
-      index = block.next;
-      continue;
-    }
-    data.set(match[1], parseScalar(raw));
+    index = storeField(data, lines, index, match[1], match[2]);
   }
   return { data, body: markdown.slice(end + 4).replace(/^\r?\n/, '') };
 }
@@ -81,10 +74,71 @@ export function frontmatterBoolean(data: Map<string, FrontmatterValue>, key: str
   return data.get(key) === true;
 }
 
+function storeField(
+  data: Map<string, FrontmatterValue>,
+  lines: readonly string[],
+  index: number,
+  key: string,
+  raw: string,
+): number {
+  if (BLOCK_MARKERS.has(raw)) {
+    const block = readBlock(lines, index, raw);
+    data.set(key, block.value);
+    return block.next;
+  }
+  if (!raw) {
+    const list = readYamlList(lines, index);
+    if (list) {
+      data.set(key, list.values);
+      return list.next;
+    }
+  }
+  data.set(key, parseScalar(raw));
+  return index;
+}
+
+function splitList(value: string): string[] {
+  const parts: string[] = [];
+  let current = '';
+  let depth = 0;
+  for (const char of value) {
+    if (char === '{') depth += 1;
+    else if (char === '}' && depth > 0) depth -= 1;
+    else if (char === ',' && depth === 0) {
+      if (current.trim()) parts.push(current.trim());
+      current = '';
+      continue;
+    }
+    current += char;
+  }
+  if (current.trim()) parts.push(current.trim());
+  return parts;
+}
+
+function readYamlList(
+  lines: readonly string[],
+  start: number,
+): { values: string[]; next: number } | undefined {
+  const values: string[] = [];
+  let index = start;
+  while (index + 1 < lines.length && /^\s+-\s+\S/.test(lineAt(lines, index + 1))) {
+    index += 1;
+    values.push(
+      unquote(
+        lineAt(lines, index)
+          .replace(/^\s+-\s+/, '')
+          .trim(),
+      ),
+    );
+  }
+  if (values.length === 0) return undefined;
+  return { values, next: index };
+}
+
 export function frontmatterList(data: Map<string, FrontmatterValue>, key: string): string[] {
   const value = data.get(key);
-  if (Array.isArray(value)) return value;
-  if (typeof value === 'string' && value.length > 0) return [value];
+  if (Array.isArray(value)) return value.flatMap((item) => splitList(item));
+  if (typeof value === 'string' && value.length > 0) return splitList(value);
   return [];
 }
 

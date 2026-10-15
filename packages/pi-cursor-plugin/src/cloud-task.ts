@@ -4,6 +4,8 @@ import { Agent, Cursor, CursorAgentError } from '@cursor/sdk';
 
 import { rejectedModelMessage } from './subagent.js';
 
+import type { SDKAgent } from '@cursor/sdk';
+
 interface CloudTaskInput {
   prompt: string;
   model?: string;
@@ -13,6 +15,7 @@ interface CloudTaskInput {
   baseBranch?: string;
   resumeId?: string;
   parentModelId?: string;
+  signal?: AbortSignal;
 }
 
 interface CloudTaskStart {
@@ -141,7 +144,17 @@ function resultText(
   return { text: body, failed: status !== 'finished' };
 }
 
+async function disposeAgent(agent: SDKAgent | undefined): Promise<void> {
+  if (!agent) return;
+  try {
+    await agent[Symbol.asyncDispose]();
+  } catch {
+    // Keep the original start or wait error.
+  }
+}
+
 export async function startCloudTask(input: CloudTaskInput): Promise<CloudTaskStart> {
+  if (input.signal?.aborted) throw new Error('Task aborted.');
   if (input.environment === 'local') {
     throw new Error('cloud_base_branch and cloud agent ids apply to environment "cloud".');
   }
@@ -169,21 +182,33 @@ export async function startCloudTask(input: CloudTaskInput): Promise<CloudTaskSt
       skipReviewerRequest: true,
     },
   };
+  let agent: SDKAgent | undefined;
   try {
-    const agent = input.resumeId
+    agent = input.resumeId
       ? await Agent.resume(input.resumeId, options)
       : await Agent.create(options);
     const run = await agent.send(brief(input));
+    const onAbort = (): void => {
+      void run.cancel();
+    };
+    input.signal?.addEventListener('abort', onAbort, { once: true });
+    const created = agent;
     const done = (async () => {
       try {
+        if (input.signal?.aborted) {
+          await run.cancel();
+          return { text: 'Task aborted.', failed: true };
+        }
         const result = await run.wait();
         return resultText(result.status, result.result, result.error?.message);
       } finally {
-        await agent[Symbol.asyncDispose]();
+        input.signal?.removeEventListener('abort', onAbort);
+        await disposeAgent(created);
       }
     })();
     return { agentId: agent.agentId, done };
   } catch (error) {
+    await disposeAgent(agent);
     if (error instanceof CursorAgentError) throw await modelHint(input.model, apiKey, error);
     throw error;
   }

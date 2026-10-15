@@ -16,17 +16,18 @@ import { storeRoot } from './manager.js';
 import {
   boundOutput,
   currentTaskDepth,
+  formatSubagentPrompt,
   listInstalledModels,
   modelRejection,
   parentModelArg,
   planTask,
   runSubagent,
   shouldBackground,
+  taskGate,
 } from './subagent.js';
 import { createTaskBoard } from './task-board.js';
-import { claimWriter, releaseWriter, rememberCheckout, taskCwd } from './worktree.js';
+import { rememberCheckout, reserveCheckout, taskCwd } from './worktree.js';
 
-import type { AgentRecord } from './catalog.js';
 import type { AskQuestion, TodoItem } from './cursor-actions.js';
 import type { SubagentLaunch, SubagentOutput } from './subagent.js';
 import type { TaskRecord } from './task-board.js';
@@ -279,25 +280,36 @@ async function executeTask(
     throw new Error('cloud_base_branch and cloud agent ids apply to environment "cloud".');
   }
   if (wantsCloud(params.environment, params.cloud_base_branch, resume)) {
-    return runCloud(params, catalog.agents, ctx.cwd, ctx.model?.id, runtime);
+    return runCloud({
+      params,
+      catalog,
+      cwd: ctx.cwd,
+      parentModelId: ctx.model?.id,
+      runtime,
+      signal,
+    });
   }
-  const writable = params.readonly !== true && resume.length === 0;
-  const stayInParent = !writable || claimWriter(ctx.cwd);
-  const release = writable ? () => releaseWriter(ctx.cwd) : () => undefined;
+  const sessionDir = join(runtime.home, 'tasks', 'sessions');
+  const reserved = reserveCheckout({
+    parent: ctx.cwd,
+    sessionDir,
+    resumeId: resume,
+    readonly: params.readonly === true,
+  });
   let handedOff = false;
   try {
     const outcome = await runLocalTask(params, signal, ctx, runtime, {
       catalog,
       resume,
       parentModel,
-      sessionDir: join(runtime.home, 'tasks', 'sessions'),
-      stayInParent,
-      release,
+      sessionDir,
+      stayInParent: reserved.stayInParent,
+      release: reserved.release,
     });
     handedOff = outcome.background;
     return outcome.result;
   } finally {
-    if (!handedOff) release();
+    if (!handedOff) reserved.release();
   }
 }
 
@@ -372,17 +384,36 @@ async function runLocalTask(
   };
 }
 
-async function runCloud(
-  params: TaskParams,
-  agents: readonly AgentRecord[],
-  cwd: string,
-  parentModelId: string | undefined,
-  runtime: TaskRuntime,
-): Promise<AgentToolResult<ToolDetails>> {
-  const resume = params.resume?.trim() ?? '';
-  const agent = agents.find((entry) => entry.name === params.subagent_type);
-  const started = await startCloudTask({
+async function runCloud(input: {
+  params: TaskParams;
+  catalog: ReturnType<typeof loadCatalog>;
+  cwd: string;
+  parentModelId: string | undefined;
+  runtime: TaskRuntime;
+  signal: AbortSignal | undefined;
+}): Promise<AgentToolResult<ToolDetails>> {
+  const { params, catalog, cwd, parentModelId, runtime, signal } = input;
+  const blocked = taskGate({
+    depth: currentTaskDepth(),
     prompt: params.prompt,
+    subagentType: params.subagent_type,
+    model: params.model,
+    agents: catalog.agents,
+  });
+  if (blocked) throw new Error(blocked);
+  const resume = params.resume?.trim() ?? '';
+  const agent = catalog.agents.find((entry) => entry.name === params.subagent_type);
+  const started = await startCloudTask({
+    prompt: formatSubagentPrompt(
+      {
+        subagentType: params.subagent_type,
+        description: params.description,
+        prompt: params.prompt,
+        cwd,
+      },
+      agent,
+      catalog.skills,
+    ),
     model: params.model,
     readonly: params.readonly === true,
     cwd,
@@ -390,6 +421,7 @@ async function runCloud(
     baseBranch: params.cloud_base_branch,
     resumeId: resume.startsWith('bc-') ? resume : undefined,
     parentModelId,
+    signal,
   });
   const background = shouldBackground(params.run_in_background, agent?.isBackground === true);
   if (background) {

@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import {
   appendSection,
   formatRuleMessage,
+  replaceSection,
   loadCatalog,
   loadRules,
   pathsInText,
@@ -115,6 +116,7 @@ export default function (pi: ExtensionAPI): void {
           home,
           cwd: ctx.cwd,
           userRulesDir: userRulesDir(),
+          projectTrusted: ctx.isProjectTrusted(),
         });
         report(ctx, result.message);
         if (result.reload) await ctx.reload();
@@ -133,21 +135,22 @@ export default function (pi: ExtensionAPI): void {
     return { skillPaths: catalog.skillPaths, promptPaths: catalog.promptPaths };
   });
   const registeredMcp = new Set<string>();
-  const syncMcp = (cwd: string): CursorMcpServer[] => {
+  const syncMcp = (cwd: string, projectTrusted: boolean): CursorMcpServer[] => {
     if (process.argv.includes('--no-mcp')) return [];
-    const servers = cursorMcpServers({ home, cwd });
+    const servers = cursorMcpServers({ home, cwd, projectTrusted });
     const connected = servers.filter((server) => registerServer(pi, server, registeredMcp));
     writeMcpCatalog(mcpCatalogDir(home), connected);
     return connected;
   };
-  syncMcp(process.cwd());
+  syncMcp(process.cwd(), false);
   pi.on('session_start', (_event, ctx) => {
-    syncMcp(ctx.cwd);
+    touchedFiles.clear();
+    syncMcp(ctx.cwd, ctx.isProjectTrusted());
   });
   pi.on('before_agent_start', (event, ctx) => {
     const prompt = userPrompt(event);
     const readonlyDisabled = process.argv.includes('--no-mcp');
-    const servers = syncMcp(ctx.cwd);
+    const servers = syncMcp(ctx.cwd, ctx.isProjectTrusted());
     const text = appendSection(
       formatRuleMessage(
         loadRules({ home, cwd: ctx.cwd, userRulesDir: userRulesDir() }),
@@ -156,7 +159,7 @@ export default function (pi: ExtensionAPI): void {
       ),
       formatMcpMessage(mcpCatalogDir(home), servers, { readonlyDisabled }),
     );
-    event.systemPromptOptions.appendSystemPrompt = appendSection(
+    event.systemPromptOptions.appendSystemPrompt = replaceSection(
       event.systemPromptOptions.appendSystemPrompt,
       text,
     );

@@ -168,6 +168,61 @@ export function git(args: string[], cwd?: string): string {
     throw new Error('git failed: ' + (result.stderr || result.error?.message || args.join(' ')));
   return result.stdout.trim();
 }
+function keptEnabled(previous: unknown): boolean {
+  if (!previous || typeof previous !== 'object') return true;
+  return Reflect.get(previous, 'enabled') !== false;
+}
+
+export function commitInstalledPlugin(input: {
+  sourceDir: string;
+  source: string;
+  sourcePath: string;
+  revision: string;
+  home: string;
+}): InstalledPlugin {
+  const { format, manifest } = readManifest(input.sourceDir);
+  const registry = loadRegistry(input.home);
+  const pluginsDir = join(input.home, 'plugins');
+  mkdirSync(pluginsDir, { recursive: true, mode: 0o700 });
+  const target = join(pluginsDir, manifest.name);
+  const staging = join(pluginsDir, `.${manifest.name}.incoming`);
+  const backup = join(pluginsDir, `.${manifest.name}.previous`);
+  rmSync(staging, { recursive: true, force: true });
+  try {
+    cpSync(input.sourceDir, staging, {
+      recursive: true,
+      filter: (item) => !item.split(sep).includes('.git'),
+    });
+  } catch (error) {
+    rmSync(staging, { recursive: true, force: true });
+    throw error;
+  }
+  rmSync(backup, { recursive: true, force: true });
+  if (existsSync(target)) renameSync(target, backup);
+  const entry: InstalledPlugin = {
+    name: manifest.name,
+    source: input.source,
+    sourcePath: input.sourcePath,
+    revision: input.revision,
+    format,
+    manifest,
+    enabled: keptEnabled(Reflect.get(registry.plugins, manifest.name)),
+    installedAt: new Date().toISOString(),
+  };
+  try {
+    renameSync(staging, target);
+    Reflect.set(registry.plugins, manifest.name, entry);
+    saveRegistry(registry, input.home);
+  } catch (error) {
+    rmSync(target, { recursive: true, force: true });
+    if (existsSync(backup)) renameSync(backup, target);
+    rmSync(staging, { recursive: true, force: true });
+    throw error;
+  }
+  rmSync(backup, { recursive: true, force: true });
+  return entry;
+}
+
 export function install(source: string, home = storeRoot()): InstalledPlugin {
   const { repo, subdir, ref } = parseSource(source);
   const root = join(home, 'cache');
@@ -184,25 +239,7 @@ export function install(source: string, home = storeRoot()): InstalledPlugin {
     git(['checkout', ref || 'HEAD'], tmp);
     const revision = git(['rev-parse', 'HEAD'], tmp);
     const path = subdir ? safeJoin(tmp, subdir) : tmp;
-    const { format, manifest } = readManifest(path);
-    const registry = loadRegistry(home);
-    const target = join(home, 'plugins', manifest.name);
-    if (existsSync(target)) rmSync(target, { recursive: true, force: true });
-    mkdirSync(join(home, 'plugins'), { recursive: true });
-    cpSync(path, target, { recursive: true, filter: (item) => !item.split(sep).includes('.git') });
-    const entry: InstalledPlugin = {
-      name: manifest.name,
-      source,
-      sourcePath: subdir,
-      revision,
-      format,
-      manifest,
-      enabled: true,
-      installedAt: new Date().toISOString(),
-    };
-    Reflect.set(registry.plugins, manifest.name, entry);
-    saveRegistry(registry, home);
-    return entry;
+    return commitInstalledPlugin({ sourceDir: path, source, sourcePath: subdir, revision, home });
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }

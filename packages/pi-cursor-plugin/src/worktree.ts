@@ -35,6 +35,31 @@ function rememberedCheckout(sessionDir: string, id: string): string | undefined 
   return value || undefined;
 }
 
+export function reserveCheckout(input: {
+  parent: string;
+  sessionDir: string;
+  resumeId: string;
+  readonly: boolean;
+}): { stayInParent: boolean; release: () => void } {
+  if (input.readonly) return { stayInParent: true, release: () => undefined };
+  if (!input.resumeId) {
+    if (claimWriter(input.parent)) {
+      return { stayInParent: true, release: () => releaseWriter(input.parent) };
+    }
+    releaseWriter(input.parent);
+    return { stayInParent: false, release: () => undefined };
+  }
+  const remembered = rememberedCheckout(input.sessionDir, input.resumeId) ?? input.parent;
+  if (!claimWriter(remembered)) {
+    releaseWriter(remembered);
+    throw new Error(`Cannot resume ${input.resumeId}: ${remembered} is in use by another Task.`);
+  }
+  return {
+    stayInParent: remembered === input.parent,
+    release: () => releaseWriter(remembered),
+  };
+}
+
 export async function taskCwd(input: {
   parent: string;
   sessionDir: string;

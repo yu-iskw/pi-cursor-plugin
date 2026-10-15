@@ -18,6 +18,7 @@ interface CommandContext {
   home: string;
   cwd: string;
   userRulesDir: string;
+  projectTrusted?: boolean;
 }
 
 interface DispatchResult {
@@ -122,7 +123,11 @@ function doctorPlugin(value: string, context: CommandContext): DispatchResult {
     name,
     loadCatalog(context.home),
     loadRules({ home: context.home, cwd: context.cwd, userRulesDir: context.userRulesDir }),
-    cursorMcpServers({ home: context.home, cwd: context.cwd }).map((server) => server.name),
+    cursorMcpServers({
+      home: context.home,
+      cwd: context.cwd,
+      projectTrusted: context.projectTrusted === true,
+    }).map((server) => server.name),
   );
   return { message, reload: false };
 }

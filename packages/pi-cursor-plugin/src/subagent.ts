@@ -82,17 +82,6 @@ export function parentModelArg(
   return `${slug}:${thinkingLevel}`;
 }
 
-function validateTask(request: TaskRequest): string | undefined {
-  if (request.depth >= MAX_DEPTH) return `Subagent depth ${request.depth} exceeds ${MAX_DEPTH}.`;
-  if (!request.prompt.trim()) return 'Task prompt is empty.';
-  if (!request.subagentType.trim()) return 'subagent_type is empty.';
-  const model = request.model?.trim();
-  if (model && !INHERITED_MODELS.has(model) && (model.startsWith('-') || !MODEL_SLUG.test(model))) {
-    return `Rejected model slug: ${model}`;
-  }
-  return undefined;
-}
-
 function resolveAgent(
   subagentType: string,
   agents: readonly AgentRecord[],
@@ -125,8 +114,25 @@ export function findSession(sessionDir: string, id: string): string | undefined 
   return undefined;
 }
 
-function taskPrompt(
-  request: TaskRequest,
+export function taskGate(input: {
+  depth: number;
+  prompt: string;
+  subagentType: string;
+  model?: string;
+  agents: readonly AgentRecord[];
+}): string | undefined {
+  if (input.depth >= MAX_DEPTH) return `Subagent depth ${input.depth} exceeds ${MAX_DEPTH}.`;
+  if (!input.prompt.trim()) return 'Task prompt is empty.';
+  if (!input.subagentType.trim()) return 'subagent_type is empty.';
+  const model = input.model?.trim();
+  if (model && !INHERITED_MODELS.has(model) && (model.startsWith('-') || !MODEL_SLUG.test(model))) {
+    return `Rejected model slug: ${model}`;
+  }
+  return resolveAgent(input.subagentType, input.agents).error;
+}
+
+export function formatSubagentPrompt(
+  request: Pick<TaskRequest, 'subagentType' | 'description' | 'prompt' | 'cwd'>,
   agent: AgentRecord | undefined,
   skills: readonly SkillRecord[],
 ): string {
@@ -275,7 +281,16 @@ export function planTask(
   agents: readonly AgentRecord[],
   skills: readonly SkillRecord[],
 ): TaskPlan {
-  const invalid = validateTask(request) ?? cloudError(request) ?? resumeError(request);
+  const invalid =
+    taskGate({
+      depth: request.depth,
+      prompt: request.prompt,
+      subagentType: request.subagentType,
+      model: request.model,
+      agents,
+    }) ??
+    cloudError(request) ??
+    resumeError(request);
   if (invalid) return { error: invalid };
   const resolved = resolveAgent(request.subagentType, agents);
   if (resolved.error) return { error: resolved.error };
@@ -284,7 +299,9 @@ export function planTask(
     launch: {
       bin: process.env.PI_BIN?.trim() || 'pi',
       args: launchArgs(request),
-      input: request.resume ? request.prompt : taskPrompt(request, resolved.record, skills),
+      input: request.resume
+        ? request.prompt
+        : formatSubagentPrompt(request, resolved.record, skills),
       cwd: request.cwd,
       env: { ...process.env, PI_CURSOR_TASK_DEPTH: String(depth) },
     },

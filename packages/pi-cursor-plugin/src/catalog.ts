@@ -314,6 +314,22 @@ export function formatRuleMessage(
   return `# Cursor plugin rules\n\n${sections.join('\n\n')}`;
 }
 
+const SECTION_START = '<!-- pi-cursor-plugin:start -->';
+const SECTION_END = '<!-- pi-cursor-plugin:end -->';
+
+export function replaceSection(current: string, section: string): string {
+  const addition = section.trim();
+  const block = addition ? `${SECTION_START}\n${addition}\n${SECTION_END}` : '';
+  const start = current.indexOf(SECTION_START);
+  const end = current.indexOf(SECTION_END);
+  if (start !== -1 && end > start) {
+    return `${current.slice(0, start)}${block}${current.slice(end + SECTION_END.length)}`.trim();
+  }
+  if (!block) return current;
+  if (!current.trim()) return block;
+  return `${current.trim()}\n\n${block}`;
+}
+
 export function appendSection(current: string, section: string): string {
   const addition = section.trim();
   if (!addition) return current;

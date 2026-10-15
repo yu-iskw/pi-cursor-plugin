@@ -19,10 +19,17 @@ import {
   globMatches,
   loadCatalog,
   loadRules,
+  replaceSection,
   skillInvocation,
   toolPaths,
 } from './catalog.js';
-import { cloudReadiness, githubRepoUrl, resolvedCloudModel, wantsCloud } from './cloud-task.js';
+import {
+  cloudReadiness,
+  githubRepoUrl,
+  resolvedCloudModel,
+  startCloudTask,
+  wantsCloud,
+} from './cloud-task.js';
 import { dispatchCursorPlugin } from './commands.js';
 import {
   applyTodos,
@@ -30,7 +37,7 @@ import {
   formatTodos,
   normalizeQuestions,
 } from './cursor-actions.js';
-import { parseFrontmatter } from './frontmatter.js';
+import { frontmatterList, parseFrontmatter } from './frontmatter.js';
 import { git, loadRegistry, saveRegistry } from './manager.js';
 import {
   cursorMcpServers,
@@ -644,6 +651,20 @@ describe('pstack compatibility', () => {
         return finished;
       }, 'background writer did not finish');
       expect(claimWriter(repo)).toBe(true);
+      await expect(
+        task.execute(
+          'busy',
+          {
+            prompt: 'resume the parent checkout',
+            description: 'busy resume',
+            subagent_type: 'generalPurpose',
+            resume: 'task-parent1',
+          },
+          undefined,
+          undefined,
+          ctx,
+        ),
+      ).rejects.toThrow('in use by another Task');
       const reading = await task.execute(
         'read',
         {
@@ -753,7 +774,12 @@ describe('pstack compatibility', () => {
           },
         }),
       );
-      const servers = cursorMcpServers({ home, cwd: home, userFile });
+      const hidden = cursorMcpServers({ home, cwd: home, userFile });
+      expect(hidden.map((server) => server.name)).toEqual(['slack', 'notion']);
+      expect(hidden.find((server) => server.name === 'slack')?.config).toEqual({
+        url: 'https://mcp.slack.com/mcp',
+      });
+      const servers = cursorMcpServers({ home, cwd: home, userFile, projectTrusted: true });
       expect(servers.map((server) => server.name)).toEqual(['slack', 'local', 'notion']);
       const slack = servers.find((server) => server.name === 'slack');
       expect(slack?.config).toEqual({ url: 'https://project.example/slack' });
@@ -787,12 +813,109 @@ describe('pstack compatibility', () => {
         home,
         cwd: home,
         userRulesDir: join(home, 'empty-rules'),
+        projectTrusted: true,
       });
       expect(doctor.message).toContain('mcp: ');
       expect(doctor.message).toContain('local');
+      const untrustedDoctor = dispatchCursorPlugin('doctor pstack', {
+        home,
+        cwd: home,
+        userRulesDir: join(home, 'empty-rules'),
+      });
+      expect(untrustedDoctor.message).not.toMatch(/mcp:.*local/);
       expect(doctor.message).toContain('notion');
       expect(doctor.message).not.toContain('sentry');
     } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('pstack review follow-ups', () => {
+  it('splits Cursor globs and replaces the plugin prompt section', () => {
+    const parsed = parseFrontmatter(
+      '---\nglobs: *.ts,*.tsx\npaths:\n  - "src/**/*.ts"\n  - "lib/**/*.ts"\n---\nUSE_EXACT_TYPES\n',
+    );
+    expect(frontmatterList(parsed.data, 'globs')).toEqual(['*.ts', '*.tsx']);
+    expect(frontmatterList(parsed.data, 'paths')).toEqual(['src/**/*.ts', 'lib/**/*.ts']);
+    expect(frontmatterList(new Map([['globs', '{src,lib}/**/*.ts']]), 'globs')).toEqual([
+      '{src,lib}/**/*.ts',
+    ]);
+    const home = mkdtempSync(join(tmpdir(), 'pstack-globs-'));
+    try {
+      mkdirSync(join(home, '.cursor', 'rules'), { recursive: true });
+      writeFileSync(
+        join(home, '.cursor', 'rules', 'types.mdc'),
+        '---\ndescription: ts\nglobs: **/*.ts,**/*.tsx\n---\nUSE_EXACT_TYPES\n',
+      );
+      const rules = loadRules({ home, cwd: home, userRulesDir: join(home, 'none') });
+      expect(formatRuleMessage(rules, [], ['src/app.ts'])).toContain('USE_EXACT_TYPES');
+      expect(formatRuleMessage(rules, [], ['README.md'])).not.toContain('USE_EXACT_TYPES');
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+    const replaced = replaceSection(replaceSection('base prompt', 'rules one'), 'rules two');
+    expect(replaced).toContain('base prompt');
+    expect(replaced).toContain('rules two');
+    expect(replaced).not.toContain('rules one');
+  });
+
+  it('rejects a cloud Task that cannot start', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'pstack-cloud-gate-'));
+    const previousDepth = process.env.PI_CURSOR_TASK_DEPTH;
+    try {
+      writePstack(home);
+      const tools = new Map<string, RegisteredTool>();
+      const pi = {
+        registerTool(tool: RegisteredTool) {
+          tools.set(tool.name, tool);
+        },
+      };
+      registerCursorTools(pi as unknown as ExtensionAPI, () => {}, home);
+      const task = tools.get('Task');
+      if (!task) throw new Error('Task tool was not registered');
+      const ctx = { cwd: home, hasUI: false } as ExtensionToolContext;
+      await expect(
+        task.execute(
+          'unknown',
+          {
+            prompt: 'look around',
+            description: 'unknown cloud agent',
+            subagent_type: 'not-an-agent',
+            environment: 'cloud',
+          },
+          undefined,
+          undefined,
+          ctx,
+        ),
+      ).rejects.toThrow('Unknown subagent_type');
+      process.env.PI_CURSOR_TASK_DEPTH = '4';
+      await expect(
+        task.execute(
+          'deep',
+          {
+            prompt: 'look around',
+            description: 'too deep',
+            subagent_type: 'generalPurpose',
+            environment: 'cloud',
+          },
+          undefined,
+          undefined,
+          ctx,
+        ),
+      ).rejects.toThrow('exceeds');
+      await expect(
+        startCloudTask({
+          prompt: 'stop',
+          readonly: true,
+          cwd: home,
+          environment: 'cloud',
+          signal: AbortSignal.abort(),
+        }),
+      ).rejects.toThrow('Task aborted.');
+    } finally {
+      if (previousDepth === undefined) delete process.env.PI_CURSOR_TASK_DEPTH;
+      else process.env.PI_CURSOR_TASK_DEPTH = previousDepth;
       rmSync(home, { recursive: true, force: true });
     }
   });
