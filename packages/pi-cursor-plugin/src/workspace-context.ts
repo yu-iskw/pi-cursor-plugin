@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join, resolve, sep } from 'node:path';
+import { dirname, join, resolve, sep } from 'node:path';
 
 import { validSessionId } from './subagent.js';
 
@@ -38,9 +38,10 @@ export function formatWorkspaceContext(input: {
   cwd: string;
   sessionId?: string;
   homeDir?: string;
+  parentTranscripts?: string;
 }): string {
-  const store = cursorProjectDir(input.cwd, input.homeDir);
-  const transcripts = join(store, 'agent-transcripts');
+  const transcripts = transcriptDirectory(input);
+  const store = dirname(transcripts);
   const lines = [
     '# Cursor workspace context',
     `Agent transcripts for this workspace live in ${transcripts}.`,
@@ -68,15 +69,21 @@ export function publishCursorTranscript(input: {
   const lines = withPrompt(linesFromSession(input.sessionFile), input.prompt);
   if (lines.length === 0) return undefined;
   const body = `${lines.join('\n')}\n`;
-  const written = writeTranscript(
-    agentTranscriptsDir(input.cwd, input.homeDir),
-    input.sessionId,
-    body,
-  );
+  const written = writeTranscript(transcriptDirectory(input), input.sessionId, body);
   if (input.parentTranscripts && input.parentSessionId) {
     writeSubagent(input.parentTranscripts, input.parentSessionId, input.sessionId, body);
   }
   return written;
+}
+
+function transcriptDirectory(input: {
+  cwd: string;
+  homeDir?: string;
+  parentTranscripts?: string;
+}): string {
+  const parent = input.parentTranscripts?.trim();
+  if (!parent) return agentTranscriptsDir(input.cwd, input.homeDir);
+  return resolve(parent);
 }
 
 function linesFromSession(file: string | undefined): string[] {

@@ -175,6 +175,7 @@ export default function (pi: ExtensionAPI): void {
       formatWorkspaceContext({
         cwd: ctx.cwd,
         sessionId: session.id,
+        parentTranscripts: process.env.PI_CURSOR_PARENT_TRANSCRIPTS,
       }),
       formatTodoMessage(sessionTodos.current()),
     ]

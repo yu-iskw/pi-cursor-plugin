@@ -1030,6 +1030,46 @@ describe('pstack review follow-ups', () => {
     }
   });
 
+  it('publishes a worktree Task transcript into the parent workspace', () => {
+    const home = mkdtempSync(join(tmpdir(), 'pstack-worktree-transcript-'));
+    try {
+      const parent = join(home, '.cursor', 'projects', 'workspace', 'agent-transcripts');
+      const worktree = join(home, '.cursor', 'worktrees', 'workspace', 'task-child1');
+      const session = join(home, 'session.jsonl');
+      writeFileSync(
+        session,
+        `${JSON.stringify({
+          type: 'message',
+          message: { role: 'user', content: 'worktree note' },
+        })}\n`,
+      );
+      const written = publishCursorTranscript({
+        cwd: worktree,
+        sessionId: 'task-child1',
+        sessionFile: session,
+        homeDir: home,
+        parentTranscripts: parent,
+        parentSessionId: 'parent01',
+      });
+      expect(written).toBe(join(parent, 'task-child1', 'task-child1.jsonl'));
+      expect(existsSync(join(home, '.cursor', 'projects', projectSlug(worktree)))).toBe(false);
+      expect(
+        readFileSync(join(parent, 'parent01', 'subagents', 'task-child1.jsonl'), 'utf8'),
+      ).toContain('worktree note');
+      const context = formatWorkspaceContext({
+        cwd: worktree,
+        sessionId: 'task-child1',
+        homeDir: home,
+        parentTranscripts: parent,
+      });
+      expect(context).toContain(parent);
+      expect(context).toContain(join(parent, 'task-child1', 'task-child1.jsonl'));
+      expect(context).not.toContain(projectSlug(worktree));
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
   it('accepts a Cursor AskQuestion prompt', () => {
     const formatted = formatAskWithoutUi(
       normalizeQuestions({
