@@ -1,62 +1,46 @@
-# {PROJECT_NAME}
+# Pi Cursor Plugin Manager
 
-{PROJECT_DESCRIPTION}
+A Pi extension that installs Cursor plugins and runs pstack with Pi's skill loader, slash commands, rules, and subagents.
 
-## Getting Started
+## Status
 
-### Prerequisites
+Targets Pi coding agent 1.2.0 (`@earendil-works/pi-coding-agent`). pstack skills keep their frontmatter and are available under the Cursor slash names (`/poteto-mode`, `/how`, `/setup-pstack`). Each enabled plugin is linked at `~/.cursor/plugins/<name>`, which is the path `/reflect` uses to tell that a skill was read. `poteto-agent` and `comment-sicko` run through the `Task` tool. `poteto-agent` starts in the background, and `Task` `resume` continues its Pi session. `auto` or `inherit-parent` runs that child on the parent Pi model and thinking level. `AskQuestion` accepts Cursor's `prompt` field and `{ id, label }` options. `TodoWrite` keeps that list on the system prompt and in the Pi widget, and restores it when the same session starts again. `alwaysApply` rules, including the file written by `/setup-pstack`, are added to the system prompt. A skill or rule with `paths` is inlined when the prompt names a matching file or the agent has read or edited one. `*.ts` matches a nested file, an absolute path matches the same relative glob, and project `.cursor/rules` load only when that project is trusted.
 
-- [pnpm](https://pnpm.io/) **11.x** (see `packageManager` in `package.json`; use [Corepack](https://nodejs.org/api/corepack.html): `corepack enable`)
-- Node.js **22+** (see `engines` in `package.json`; `.node-version` pins the version used for local dev and CI)
+`Task` `environment: "cloud"` starts a Cursor cloud agent when `CURSOR_API_KEY` is set and the checkout has a GitHub `origin`. A missing key or origin returns an error so the caller can respawn with `environment: "local"`. `cloud_base_branch` selects the cloud starting ref, and a `bc-` agent id resumes that cloud agent. A rejected model slug lists the closest slugs of the same family. Readonly local subagents pass `--no-mcp` and are told to respawn with `readonly` false when they need MCP. A second concurrent writable local Task gets its own git worktree at `~/.cursor/worktrees/<repo>/<task-id>` on branch `pstack/<task-id>`. Readonly Tasks and the first writer stay in the parent checkout, and resume reuses the recorded checkout. A non-readonly agent registers servers from `~/.cursor/mcp.json`, the project `.cursor/mcp.json`, and plugins enabled in this manager, writes them to `~/.cursor/projects/<slug>/mcps` with a `tools/` descriptor for each connected tool and a `resources/` descriptor for each resource or resource template a stdio or HTTP server lists. Those servers are registered with direct exposure, so agent mode calls `mcp__<server>__<tool>`. The catalog lists them for `/why` and `/reflect`. The system prompt names this workspace's `agent-transcripts` directory and the agent store, and the Pi session is written to `~/.cursor/projects/<slug>/agent-transcripts/<id>/<id>.jsonl` so `/reflect` and `/recall` can read it. Tool calls there use Cursor names such as `Read` and `Shell`, and each tool result names the tool and whether it failed. A Task in a git worktree writes that transcript into the parent workspace directory. Hooks are not executed. pstack does not ship hooks or its own MCP servers.
 
-Dependency installs follow pnpm 11 supply-chain settings in [`pnpm-workspace.yaml`](pnpm-workspace.yaml): **minimum release age** (this template uses a **7-day** quarantine, stricter than pnpm’s built-in 24-hour default), **blocking exotic transitive dependencies**, and an **`allowBuilds`** allowlist for packages that run install scripts. See [pnpm 11 release notes](https://pnpm.io/blog/releases/11.0) and [Supply-chain defaults (Socket)](https://socket.dev/blog/pnpm-11-adds-new-supply-chain-protection-defaults).
-
-Linting and formatting use [Trunk](https://trunk.io/) (ESLint, Prettier, and more). The Trunk **launcher** is installed with project dependencies—you do not need a separate Trunk install for the default workflow.
-
-### Installation
+## Install
 
 ```bash
 pnpm install
+pnpm --filter @yu-iskw/pi-cursor-plugin build
+pi install ./packages/pi-cursor-plugin
 ```
 
-Optional: prefetch Trunk’s hermetic tools (helpful for offline work or CI images):
+`pi` is `@earendil-works/pi-coding-agent@1.2.0`.
 
-```bash
-pnpm exec trunk install
+## Usage
+
+```text
+/cursor-plugin marketplace add github:cursor/plugins official
+/cursor-plugin install pstack
+/cursor-plugin install official:thermos
+/cursor-plugin install github:cursor/plugins/cursor-team-kit
+/cursor-plugin list
+/cursor-plugin skills
+/cursor-plugin inspect pstack
+/cursor-plugin doctor pstack
+/cursor-plugin disable thermos
+/cursor-plugin enable thermos
+/cursor-plugin update pstack
+/cursor-plugin uninstall thermos
+/poteto-mode investigate the plugin loader
+/setup-pstack
 ```
 
-If you prefer a global `trunk` on your PATH, see the [Trunk installation guide](https://docs.trunk.io/references/cli/getting-started/install) (e.g. `brew install trunk-io` on macOS).
+Install, update, enable, and disable reload Pi so new skills and slash commands are registered. `/poteto-mode` loads that skill the same way Pi loads `/skill:name`: the body is in a skill block and relative files resolve from the skill directory.
 
-### Supply-chain protections
+## Security and limitations
 
-The template uses **pnpm 11** with settings in [`pnpm-workspace.yaml`](pnpm-workspace.yaml): a **7-day** [`minimumReleaseAge`](https://pnpm.io/settings#minimumreleaseage) (10080 minutes, stricter than pnpm’s default 1 day), [`blockExoticSubdeps`](https://pnpm.io/settings#blockexoticsubdeps) enabled, and an [`allowBuilds`](https://pnpm.io/settings#allowbuilds) map for dependencies that must run install scripts (pnpm 11 requires this for native toolchain packages such as esbuild). See the [pnpm 11 release notes](https://pnpm.io/blog/releases/11.0).
+Installing a package downloads source with git and does not run plugin install scripts or hooks. The `task` tool starts `pi --print` for a subagent and does not execute repository hooks. GitHub URLs are limited to public GitHub repositories. Marketplace aliases map to repository roots. Review plugin instructions before enabling them.
 
-CI: pull requests and `main` run `pnpm lint:security` then generate/scan an SPDX SBOM (`.github/workflows/sbom.yml`). Publish re-checks `pnpm lint:security` before npm publish.
-
-### Build
-
-```bash
-pnpm build
-```
-
-### Test
-
-```bash
-pnpm test
-```
-
-### Linting & Formatting
-
-```bash
-pnpm lint
-pnpm format
-```
-
-## Project Structure
-
-- `packages/`: Monorepo packages
-  - `common/`: Shared utilities and types
-
-## License
-
-{LICENSE}
+Review the `AGENTS.md` instructions in this repository before developing changes. Run `pnpm test`, `pnpm build`, and `pnpm lint` for validation.

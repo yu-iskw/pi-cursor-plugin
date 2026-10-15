@@ -9,15 +9,17 @@ blockExoticSubdeps: true # explicit; matches v11 default
 
 # Build scripts: pnpm 11 requires explicit approval for dependencies that run install scripts.
 # Approved for Vite/Vitest toolchain (esbuild native binary, unrs-resolver postinstall).
+# Pi's type package pulls protobufjs and @google/genai. Their scripts are not needed to compile the extension.
 allowBuilds:
   esbuild: true
   unrs-resolver: true
+  # Transitive install hooks from @earendil-works/pi-coding-agent: a version-scheme warning and an echo.
+  protobufjs: true
+  '@google/genai': true
 
 # Migrated from package.json#pnpm (pnpm 11 no longer reads that field)
 # Allow urgent patched versions blocked by the 7-day quarantine.
-# Allow urgent patched versions blocked by the 7-day quarantine.
 minimumReleaseAgeExclude:
-  - brace-expansion@5.0.9
   - nanoid@3.3.18
   # SBOM / osv-scanner fixes (published within 7d quarantine window)
   - vitest
@@ -25,19 +27,28 @@ minimumReleaseAgeExclude:
   - '@vitest/mocker'
   - browserslist
   - baseline-browser-mapping
+  # Pi 1.2.0 was published 2026-10-12; the adapter targets that release explicitly.
+  - '@earendil-works/pi-coding-agent'
+  - '@earendil-works/pi-agent-core'
+  - '@earendil-works/pi-ai'
+  - '@earendil-works/pi-tui'
+  - '@earendil-works/pi-mcp'
+  - '@earendil-works/pi-codemode'
 
 overrides:
   # GHSA-r292-9mhp-454m fixed in 7.5.21+
   tar: 7.5.22
-  # GHSA-rgw5-rvv9-x895 fixed in 5.0.9+
-  brace-expansion: 5.0.9
+  # GHSA-6j4f-fj2g-mc7p, GHSA-qhr7-859c-m2p7, and GHSA-q2hr-2g5m-vwhr fixed in 5.0.12
+  brace-expansion: 5.0.12
   # GHSA-2v37-7h3g-55p8 fixed in the 3.x line in 3.3.18+
   nanoid: 3.3.18
   # GHSA-73wf-gq98-2v4g / GHSA-c83g-rgw3-j3cx fixed in 4.28.7+
   browserslist: 4.28.9
   # GHSA-w5vr-8v7q-w6rv fixed in 2.11.0+
   baseline-browser-mapping: 2.11.0
-  # GHSA-7w5x-hrqm-74c2 fixed in 1.7.1+
-  smol-toml: 1.8.0
+  # GHSA-7w5x-hrqm-74c2 fixed in 1.7.1+; GHSA-r4xh-jqrq-34v2 fixed in 1.9.0
+  smol-toml: 1.9.0
+  # GHSA-68fv-2mgg-jv7q fixed in 1.2.2
+  source-map-js: 1.2.2
   # GHSA-p498-v437-472g fixed in 0.16.8+
   '@humanfs/node': 0.16.8

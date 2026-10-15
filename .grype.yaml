@@ -1,0 +1,9 @@
+ignore:
+  - vulnerability: GHSA-vfj7-8cjw-p6xm
+    package:
+      name: braces
+      version: 3.0.3
+      type: npm
+    reason: >
+      braces 3.0.3 is the newest npm release and every published version is
+      affected. It is only reached through micromatch and fast-glob.
