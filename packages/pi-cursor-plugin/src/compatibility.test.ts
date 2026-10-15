@@ -37,6 +37,7 @@ import {
   formatTodoMessage,
   formatTodos,
   normalizeQuestions,
+  sessionTodoFile,
 } from './cursor-actions.js';
 import { frontmatterList, parseFrontmatter } from './frontmatter.js';
 import { git, loadRegistry, saveRegistry } from './manager.js';
@@ -1056,16 +1057,20 @@ describe('pstack review follow-ups', () => {
           tools.set(tool.name, tool);
         },
       };
-      const session = registerCursorTools(pi as unknown as ExtensionAPI, () => {}, home);
+      const session = registerCursorTools(pi as unknown as ExtensionAPI, () => {}, home, home);
       const todo = tools.get('TodoWrite');
       if (!todo) throw new Error('TodoWrite was not registered');
       const shown: Array<string[] | undefined> = [];
       const ctx = {
+        cwd: home,
         hasUI: true,
         ui: {
           setWidget(_key: string, content: string[] | undefined) {
             shown.push(content);
           },
+        },
+        sessionManager: {
+          getSessionId: () => 'task-todo01',
         },
       } as ExtensionToolContext;
       const written = await todo.execute(
@@ -1082,6 +1087,26 @@ describe('pstack review follow-ups', () => {
       expect(formatTodoMessage(session.current())).toContain('# Session todos');
       expect(formatTodoMessage(session.current())).toContain('copy the steps');
       expect(shown[0]?.join('\n')).toContain('copy the steps');
+      const stored = sessionTodoFile(home, 'task-todo01', home);
+      expect(readFileSync(stored ?? '', 'utf8')).toContain('copy the steps');
+      const resumed = registerCursorTools(pi as unknown as ExtensionAPI, () => {}, home, home);
+      resumed.sync(ctx);
+      expect(formatTodoMessage(resumed.current())).toContain('copy the steps');
+      const other = { ...ctx, sessionManager: { getSessionId: () => 'task-todo02' } };
+      resumed.sync(other as ExtensionToolContext);
+      expect(formatTodoMessage(resumed.current())).toBe('');
+      const escaped = {
+        ...ctx,
+        sessionManager: { getSessionId: () => '../etc' },
+      } as ExtensionToolContext;
+      await todo.execute(
+        'todo-2',
+        { merge: false, todos: [{ id: 'nope', content: 'escape', status: 'pending' }] },
+        undefined,
+        undefined,
+        escaped,
+      );
+      expect(sessionTodoFile(home, '../etc', home)).toBeUndefined();
       session.reset();
       expect(formatTodoMessage(session.current())).toBe('');
     } finally {

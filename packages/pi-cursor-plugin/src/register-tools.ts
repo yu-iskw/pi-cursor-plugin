@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { mkdirSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { join } from 'node:path';
 
 import { Type } from 'typebox';
@@ -11,7 +12,10 @@ import {
   formatAskWithoutUi,
   formatTodos,
   normalizeQuestions,
+  readSessionTodos,
+  sessionTodoFile,
   TODO_WIDGET,
+  writeSessionTodos,
 } from './cursor-actions.js';
 import { storeRoot } from './manager.js';
 import {
@@ -42,6 +46,7 @@ import type { TaskRecord } from './task-board.js';
 import type {
   AgentToolResult,
   ExtensionAPI,
+  ExtensionContext,
   ExtensionToolContext,
 } from '@earendil-works/pi-coding-agent';
 
@@ -106,7 +111,8 @@ export function registerCursorTools(
   pi: ExtensionAPI,
   deliver: (message: string) => void,
   home = storeRoot(),
-): { current(): readonly TodoItem[]; reset(): void } {
+  cursorHome = homedir(),
+): { current(): readonly TodoItem[]; reset(): void; sync(ctx: ExtensionContext): void } {
   const board = createTaskBoard();
   let todos: TodoItem[] = [];
 
@@ -219,6 +225,7 @@ export function registerCursorTools(
         status: todo.status,
       }));
       todos = applyTodos(todos, { merge: params.merge, todos: incoming });
+      persistTodos(ctx, todos, cursorHome);
       showTodos(ctx, todos);
       return Promise.resolve(textResult(formatTodos(todos), { kind: 'todos' }));
     },
@@ -228,10 +235,28 @@ export function registerCursorTools(
     reset: () => {
       todos = [];
     },
+    sync(ctx) {
+      todos = loadTodos(ctx, cursorHome);
+      showTodos(ctx, todos);
+    },
   };
 }
 
-function showTodos(ctx: ExtensionToolContext, todos: readonly TodoItem[]): void {
+function persistTodos(ctx: ExtensionContext, todos: readonly TodoItem[], cursorHome: string): void {
+  const session = sessionIdentity(ctx);
+  if (!session.id) return;
+  const file = sessionTodoFile(ctx.cwd, session.id, cursorHome);
+  if (!file) return;
+  writeSessionTodos(file, todos);
+}
+
+function loadTodos(ctx: ExtensionContext, cursorHome: string): TodoItem[] {
+  const session = sessionIdentity(ctx);
+  if (!session.id) return [];
+  return readSessionTodos(sessionTodoFile(ctx.cwd, session.id, cursorHome));
+}
+
+function showTodos(ctx: ExtensionContext, todos: readonly TodoItem[]): void {
   if (!ctx.hasUI) return;
   ctx.ui.setWidget(TODO_WIDGET, todos.length === 0 ? undefined : formatTodos(todos).split('\n'));
 }

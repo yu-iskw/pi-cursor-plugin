@@ -1,3 +1,10 @@
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { dirname, join } from 'node:path';
+
+import { validSessionId } from './subagent.js';
+import { projectSlug } from './workspace-context.js';
+
 export type TodoStatus = 'pending' | 'in_progress' | 'completed' | 'cancelled';
 
 export interface TodoItem {
@@ -45,6 +52,63 @@ export const TODO_WIDGET = 'pi-cursor-plugin-todos';
 export function formatTodoMessage(todos: readonly TodoItem[]): string {
   if (todos.length === 0) return '';
   return `# Session todos\n\n${formatTodos(todos)}`;
+}
+
+export function sessionTodoFile(
+  cwd: string,
+  sessionId: string,
+  homeDir = homedir(),
+): string | undefined {
+  if (!validSessionId(sessionId)) return undefined;
+  return join(homeDir, '.cursor', 'projects', projectSlug(cwd), 'todos', `${sessionId}.json`);
+}
+
+export function readSessionTodos(file: string | undefined): TodoItem[] {
+  if (!file || !existsSync(file)) return [];
+  return parseTodos(readFileSync(file, 'utf8'));
+}
+
+export function writeSessionTodos(file: string, todos: readonly TodoItem[]): void {
+  mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
+  writeFileSync(file, `${JSON.stringify(todos)}\n`, { mode: 0o600 });
+}
+
+function parseTodos(raw: string): TodoItem[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw) as unknown;
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(parsed)) return [];
+  const items: TodoItem[] = [];
+  for (const entry of parsed) {
+    const item = todoItem(entry);
+    if (item) items.push(item);
+  }
+  return items;
+}
+
+function todoItem(entry: unknown): TodoItem | undefined {
+  if (!entry || typeof entry !== 'object') return undefined;
+  const id: unknown = Reflect.get(entry, 'id');
+  const content: unknown = Reflect.get(entry, 'content');
+  const status: unknown = Reflect.get(entry, 'status');
+  if (typeof id !== 'string' || typeof content !== 'string' || !isTodoStatus(status))
+    return undefined;
+  return { id, content, status };
+}
+
+function isTodoStatus(status: unknown): status is TodoStatus {
+  switch (status) {
+    case 'pending':
+    case 'in_progress':
+    case 'completed':
+    case 'cancelled':
+      return true;
+    default:
+      return false;
+  }
 }
 
 interface AskOption {

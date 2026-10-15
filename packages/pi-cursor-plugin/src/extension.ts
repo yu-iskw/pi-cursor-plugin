@@ -11,7 +11,7 @@ import {
   toolPaths,
 } from './catalog.js';
 import { dispatchCursorPlugin } from './commands.js';
-import { formatTodoMessage, TODO_WIDGET } from './cursor-actions.js';
+import { formatTodoMessage } from './cursor-actions.js';
 import { storeRoot } from './manager.js';
 import {
   cursorMcpServers,
@@ -150,12 +150,12 @@ export default function (pi: ExtensionAPI): void {
   syncMcp(process.cwd(), false);
   pi.on('session_start', (_event, ctx) => {
     touchedFiles.clear();
-    sessionTodos.reset();
-    if (ctx.hasUI) ctx.ui.setWidget(TODO_WIDGET, undefined);
+    sessionTodos.sync(ctx);
     syncMcp(ctx.cwd, ctx.isProjectTrusted());
     publishLiveSession(ctx, '');
   });
   pi.on('before_agent_start', (event, ctx) => {
+    sessionTodos.sync(ctx);
     const prompt = userPrompt(event);
     const session = publishLiveSession(ctx, prompt);
     const readonlyDisabled = process.argv.includes('--no-mcp');
