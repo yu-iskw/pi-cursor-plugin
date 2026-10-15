@@ -8,6 +8,7 @@ import {
   loadRules,
   pathsInText,
   skillInvocation,
+  toolPaths,
 } from './catalog.js';
 import { dispatchCursorPlugin } from './commands.js';
 import { storeRoot } from './manager.js';
@@ -116,6 +117,10 @@ export default function (pi: ExtensionAPI): void {
     },
   });
   registerSkillCommands(pi, home);
+  const touchedFiles = new Set<string>();
+  pi.on('tool_call', (event) => {
+    for (const file of toolPaths(event.toolName, event.input)) touchedFiles.add(file);
+  });
   pi.on('resources_discover', () => {
     const catalog = loadCatalog(home);
     return { skillPaths: catalog.skillPaths, promptPaths: catalog.promptPaths };
@@ -125,7 +130,7 @@ export default function (pi: ExtensionAPI): void {
     const text = formatRuleMessage(
       loadRules({ home, cwd: ctx.cwd, userRulesDir: userRulesDir() }),
       loadCatalog(home).skills,
-      pathsInText(prompt),
+      [...pathsInText(prompt), ...touchedFiles],
     );
     event.systemPromptOptions.appendSystemPrompt = appendSection(
       event.systemPromptOptions.appendSystemPrompt,

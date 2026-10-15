@@ -232,6 +232,14 @@ function rememberPath(found: string[], token: string): void {
   if (!found.includes(token)) found.push(token);
 }
 
+const FILE_TOOLS = new Set(['read', 'edit', 'write', 'grep']);
+
+export function toolPaths(toolName: string, input: unknown): string[] {
+  if (!FILE_TOOLS.has(toolName) || !input || typeof input !== 'object') return [];
+  const path: unknown = Reflect.get(input, 'path');
+  return typeof path === 'string' && path.trim() ? [path.trim()] : [];
+}
+
 export function pathsInText(text: string): string[] {
   const found: string[] = [];
   let token = '';
@@ -253,6 +261,10 @@ export function formatRuleMessage(
 ): string {
   const always = rules.filter((rule) => rule.alwaysApply);
   const pathRules = rules.filter((rule) => !rule.alwaysApply && rule.globs.length > 0);
+  const matchedRules = pathRules.filter((rule) =>
+    activeFiles.some((file) => rule.globs.some((glob) => globMatches(glob, file))),
+  );
+  const indexedRules = pathRules.filter((rule) => !matchedRules.includes(rule));
   const requestable = rules.filter((rule) => !rule.alwaysApply && rule.globs.length === 0);
   const pathSkills = skills.filter((skill) => skill.paths.length > 0);
   const matchedSkills = pathSkills.filter((skill) =>
@@ -267,10 +279,17 @@ export function formatRuleMessage(
         .join('\n\n'),
     );
   }
-  if (pathRules.length > 0) {
+  if (matchedRules.length > 0) {
+    sections.push(
+      matchedRules
+        .map((rule) => `## ${basename(rule.path)}\nPath: ${rule.path}\n\n${rule.body}`)
+        .join('\n\n'),
+    );
+  }
+  if (indexedRules.length > 0) {
     sections.push(
       `## Path-scoped rules\nRead the file when a matching path is in play.\n${bullet(
-        pathRules.map((rule) => `${rule.path} (${rule.globs.join(', ')})`),
+        indexedRules.map((rule) => `${rule.path} (${rule.globs.join(', ')})`),
       )}`,
     );
   }

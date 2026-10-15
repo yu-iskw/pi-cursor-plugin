@@ -12,6 +12,7 @@ import {
   loadCatalog,
   loadRules,
   skillInvocation,
+  toolPaths,
 } from './catalog.js';
 import { cloudReadiness, githubRepoUrl, wantsCloud } from './cloud-task.js';
 import { dispatchCursorPlugin } from './commands.js';
@@ -130,11 +131,26 @@ describe('pstack compatibility', () => {
         join(userRules, 'notes.mdc'),
         '---\ndescription: requestable note\n---\nSECRET_RULE_BODY\n',
       );
+      writeFileSync(
+        join(userRules, 'typescript.mdc'),
+        '---\ndescription: ts rule\nglobs: ["**/*.ts"]\n---\nUSE_EXACT_TYPES\n',
+      );
       const rules = loadRules({ home, cwd, userRulesDir: userRules });
-      const formatted = formatRuleMessage(rules, loadCatalog(home).skills);
+      const skills = loadCatalog(home).skills;
+      const formatted = formatRuleMessage(rules, skills);
       expect(formatted).toContain('Always use the local marker.');
       expect(formatted).toContain('requestable note');
       expect(formatted).not.toContain('SECRET_RULE_BODY');
+      expect(formatted).not.toContain('USE_EXACT_TYPES');
+      expect(formatted).toContain('Path-scoped rules');
+      const matched = formatRuleMessage(rules, skills, [
+        ...['src/app.ts'],
+        ...toolPaths('read', { path: ' src/app.ts ' }),
+      ]);
+      expect(matched).toContain('USE_EXACT_TYPES');
+      expect(matched).not.toContain('Path-scoped rules');
+      expect(toolPaths('bash', {})).toEqual([]);
+      expect(toolPaths('read', {})).toEqual([]);
       expect(appendSection(formatted, formatted)).toBe(formatted);
     } finally {
       rmSync(home, { recursive: true, force: true });
@@ -326,13 +342,21 @@ describe('pstack compatibility', () => {
   });
 
   it('names the closest model family and the cloud handoff', async () => {
-    expect(modelFamily('grok-4.7-xhigh-fast')).toBe('grok-4.7');
-    expect(modelFamily('claude-opus-5-5-xhigh')).toBe('claude-opus-5-5');
+    expect(modelFamily('grok-4.7-xhigh-fast')).toBe('grok');
+    expect(modelFamily('claude-opus-5-5-xhigh')).toBe('claude');
+    expect(modelFamily('composer-2.5-fast')).toBe('grok');
+    expect(
+      suggestModels('composer-2.5-fast', [
+        'grok-4.7-high',
+        'cursor-grok-4.6-low',
+        'claude-opus-5-5-xhigh',
+      ]),
+    ).toEqual(['grok-4.7-high', 'cursor-grok-4.6-low']);
     expect(
       suggestModels('grok-4.7-xhigh-fast', ['grok-4.7-high', 'claude-opus-5-5-xhigh']),
     ).toEqual(['grok-4.7-high']);
     expect(rejectedModelMessage('grok-4.7-xhigh-fast', ['grok-4.7-high'])).toContain(
-      'Closest grok-4.7: grok-4.7-high',
+      'Closest grok: grok-4.7-high',
     );
     expect(modelRejection('auto', ['grok-4.7-high'])).toBeUndefined();
     expect(modelRejection('grok-4.7-xhigh-fast', [])).toBeUndefined();

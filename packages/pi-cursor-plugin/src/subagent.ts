@@ -130,9 +130,21 @@ function taskPrompt(
   return lines.join('\n\n');
 }
 
+const PSTACK_FAMILIES: readonly { name: string; prefixes: readonly string[] }[] = [
+  { name: 'claude', prefixes: ['claude-'] },
+  { name: 'grok', prefixes: ['cursor-grok-', 'composer-', 'grok-'] },
+];
+
 export function modelFamily(slug: string): string {
+  for (const family of PSTACK_FAMILIES) {
+    if (family.prefixes.some((prefix) => slug.startsWith(prefix))) return family.name;
+  }
   const parts = slug.split('-');
-  while (parts.length > 1 && EFFORT_TOKENS.has(parts[parts.length - 1] ?? '')) parts.pop();
+  while (parts.length > 1) {
+    const tail = parts[parts.length - 1];
+    if (!tail || !EFFORT_TOKENS.has(tail)) break;
+    parts.pop();
+  }
   return parts.join('-');
 }
 
