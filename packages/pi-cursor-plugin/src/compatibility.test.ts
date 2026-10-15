@@ -1316,15 +1316,25 @@ describe('pstack review follow-ups', () => {
           description: 'Design notes',
           mimeType: 'text/markdown',
         },
+        {
+          server: 'notes',
+          uriTemplate: 'notes://decision/{id}',
+          name: 'decision',
+          description: 'One design note',
+          mimeType: 'text/markdown',
+        },
       ]);
       const directory = mcpCatalogDir(home, home);
       writeMcpCatalog(directory, [server], [], resources);
       const file = join(directory, 'notes', 'resources', 'decisions.json');
+      const template = join(directory, 'notes', 'resources', 'decision.json');
       const body = readFileSync(file, 'utf8');
       expect(body).toContain('notes://decisions');
       expect(body).toContain('Design notes');
+      expect(readFileSync(template, 'utf8')).toContain('notes://decision/{id}');
       writeMcpCatalog(directory, [server], [], []);
       expect(existsSync(file)).toBe(false);
+      expect(existsSync(template)).toBe(false);
       await expect(
         listStdioResources({
           name: 'remote',
@@ -1345,6 +1355,13 @@ describe('pstack review follow-ups', () => {
             uri: 'notes://http-decisions',
             name: 'http_decisions',
             description: 'HTTP design notes',
+            mimeType: 'text/markdown',
+          },
+          {
+            server: 'notes',
+            uriTemplate: 'notes://http-decision/{id}',
+            name: 'http_decision',
+            description: 'One HTTP design note',
             mimeType: 'text/markdown',
           },
         ]);
@@ -1398,6 +1415,27 @@ function replyNotes(body: string, response: ServerResponse): void {
     response.end();
     return;
   }
+  if (method === 'resources/templates/list') {
+    response.setHeader('content-type', 'application/json');
+    response.end(
+      JSON.stringify({
+        jsonrpc: '2.0',
+        id: 3,
+        result: {
+          resourceTemplates: [
+            {
+              uriTemplate: 'notes://http-decision/{id}',
+              name: 'http_decision',
+              description: 'One HTTP design note',
+              mimeType: 'text/markdown',
+            },
+            { uriTemplate: 'ui://notes/panel/{id}', name: 'panel' },
+          ],
+        },
+      }),
+    );
+    return;
+  }
   response.setHeader('content-type', 'application/json');
   response.end(
     JSON.stringify({
@@ -1427,6 +1465,10 @@ rl.on('line', (line) => {
   if (msg.method === 'resources/list') reply({ resources: [
     { uri: 'notes://decisions', name: 'decisions', description: 'Design notes', mimeType: 'text/markdown' },
     { uri: 'ui://notes/panel', name: 'panel' },
+  ] });
+  if (msg.method === 'resources/templates/list') reply({ resourceTemplates: [
+    { uriTemplate: 'notes://decision/{id}', name: 'decision', description: 'One design note', mimeType: 'text/markdown' },
+    { uriTemplate: 'ui://notes/panel/{id}', name: 'panel' },
   ] });
 });
 `;

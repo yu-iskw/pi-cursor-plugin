@@ -23,7 +23,7 @@ export async function listHttpResources(server: CursorMcpServer): Promise<McpRes
   if (!url) return [];
   try {
     const result = await requestHttpResources(url, server.config.headers);
-    return resourcesFrom(server.name, result);
+    return descriptorsFrom(server.name, result);
   } catch {
     return [];
   }
@@ -34,7 +34,7 @@ export async function listStdioResources(
 ): Promise<McpResourceDescriptor[]> {
   if (!('command' in server.config)) return [];
   const result = await requestResources(server.config);
-  return resourcesFrom(server.name, result);
+  return descriptorsFrom(server.name, result);
 }
 
 function requestResources(config: {
@@ -51,22 +51,23 @@ function requestResources(config: {
     });
     let buffer = '';
     let settled = false;
-    const finish = (value: unknown): void => {
+    const state: { resources?: unknown; templates?: unknown; asked: boolean } = { asked: false };
+    const finish = (): void => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
       child.kill();
-      resolve(value);
+      resolve(listedPayload(state.resources, state.templates));
     };
-    const timer = setTimeout(() => finish(undefined), LIST_TIMEOUT_MS);
-    child.on('error', () => finish(undefined));
-    child.on('close', () => finish(undefined));
+    const timer = setTimeout(finish, LIST_TIMEOUT_MS);
+    child.on('error', finish);
+    child.on('close', finish);
     child.stdout.setEncoding('utf8');
     child.stdout.on('data', (chunk: string) => {
       buffer += chunk;
       const lines = buffer.split('\n');
       buffer = lines.pop() ?? '';
-      for (const line of lines) acceptLine(child, line, finish);
+      for (const line of lines) acceptLine(child, line, state, finish);
     });
     writeMessage(child, {
       jsonrpc: '2.0',
@@ -80,7 +81,8 @@ function requestResources(config: {
 function acceptLine(
   child: ReturnType<typeof spawn>,
   line: string,
-  finish: (value: unknown) => void,
+  state: { resources?: unknown; templates?: unknown; asked: boolean },
+  finish: () => void,
 ): void {
   const initialized = messageResult(line, 1);
   if (initialized) {
@@ -88,7 +90,16 @@ function acceptLine(
     writeMessage(child, { jsonrpc: '2.0', id: 2, method: 'resources/list' });
   }
   const listed = messageResult(line, 2);
-  if (listed) finish(listed.result);
+  if (listed && !state.asked) {
+    state.asked = true;
+    state.resources = listed.result;
+    writeMessage(child, { jsonrpc: '2.0', id: 3, method: 'resources/templates/list' });
+  }
+  const templates = messageResult(line, 3);
+  if (templates) {
+    state.templates = templates.result;
+    finish();
+  }
 }
 
 function messageResult(line: string, id: number): { result: unknown } | undefined {
@@ -129,12 +140,39 @@ function childEnv(extra: Record<string, string> | undefined): NodeJS.ProcessEnv 
   return env;
 }
 
-function resourcesFrom(server: string, result: unknown): McpResourceDescriptor[] {
+function listedPayload(
+  resources: unknown,
+  templates: unknown,
+): { resources: unknown; resourceTemplates: unknown } {
+  return {
+    resources: listField(resources, 'resources'),
+    resourceTemplates: listField(templates, 'resourceTemplates'),
+  };
+}
+
+function listField(result: unknown, key: 'resources' | 'resourceTemplates'): unknown {
+  if (!result || typeof result !== 'object') return undefined;
+  const value: unknown = Reflect.get(result, key);
+  return value;
+}
+
+function descriptorsFrom(server: string, result: unknown): McpResourceDescriptor[] {
+  return [
+    ...entriesFrom(server, result, 'resources'),
+    ...entriesFrom(server, result, 'resourceTemplates'),
+  ];
+}
+
+function entriesFrom(
+  server: string,
+  result: unknown,
+  key: 'resources' | 'resourceTemplates',
+): McpResourceDescriptor[] {
   if (!result || typeof result !== 'object') return [];
-  const resources: unknown = Reflect.get(result, 'resources');
-  if (!Array.isArray(resources)) return [];
+  const entries: unknown = Reflect.get(result, key);
+  if (!Array.isArray(entries)) return [];
   const found: McpResourceDescriptor[] = [];
-  for (const item of resources) {
+  for (const item of entries) {
     const descriptor = resourceDescriptor(server, item);
     if (descriptor) found.push(descriptor);
   }
@@ -143,21 +181,26 @@ function resourcesFrom(server: string, result: unknown): McpResourceDescriptor[]
 
 function resourceDescriptor(server: string, item: unknown): McpResourceDescriptor | undefined {
   if (!item || typeof item !== 'object') return undefined;
-  const uri: unknown = Reflect.get(item, 'uri');
-  const name: unknown = Reflect.get(item, 'name');
-  if (typeof uri !== 'string' || typeof name !== 'string' || uri.startsWith('ui://'))
-    return undefined;
-  const description: unknown = Reflect.get(item, 'description');
-  const mimeType: unknown = Reflect.get(item, 'mimeType');
+  const name = stringField(item, 'name');
+  const uri = stringField(item, 'uri');
+  const uriTemplate = stringField(item, 'uriTemplate');
+  if (!name || (!uri && !uriTemplate)) return undefined;
+  if (uri?.startsWith('ui://') || uriTemplate?.startsWith('ui://')) return undefined;
+  const description = stringField(item, 'description');
+  const mimeType = stringField(item, 'mimeType');
   return {
     server,
     name,
-    uri,
-    ...(typeof description === 'string' && description.trim()
-      ? { description: description.trim() }
-      : {}),
-    ...(typeof mimeType === 'string' && mimeType.trim() ? { mimeType: mimeType.trim() } : {}),
+    ...(uri ? { uri } : {}),
+    ...(uriTemplate ? { uriTemplate } : {}),
+    ...(description ? { description } : {}),
+    ...(mimeType ? { mimeType } : {}),
   };
+}
+
+function stringField(item: object, key: string): string | undefined {
+  const value: unknown = Reflect.get(item, key);
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
 }
 
 function httpUrl(value: string): string | undefined {
@@ -187,7 +230,14 @@ async function requestHttpResources(
   if (initialized.sessionId) headers.set('Mcp-Session-Id', initialized.sessionId);
   await postRpc({ url, headers, method: 'notifications/initialized', signal });
   const listed = await postRpc({ url, headers, id: 2, method: 'resources/list', signal });
-  return listed.result;
+  let templates: unknown;
+  try {
+    templates = (await postRpc({ url, headers, id: 3, method: 'resources/templates/list', signal }))
+      .result;
+  } catch {
+    templates = undefined;
+  }
+  return listedPayload(listed.result, templates);
 }
 
 async function postRpc(input: {

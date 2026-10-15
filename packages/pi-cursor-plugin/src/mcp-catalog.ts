@@ -25,7 +25,8 @@ export interface McpToolDescriptor {
 export interface McpResourceDescriptor {
   server: string;
   name: string;
-  uri: string;
+  uri?: string;
+  uriTemplate?: string;
   description?: string;
   mimeType?: string;
 }
@@ -191,10 +192,15 @@ function resourceFileName(name: string): string | undefined {
 }
 
 function resourceDescriptor(resource: McpResourceDescriptor): string {
-  const body: { uri: string; name: string; description?: string; mimeType?: string } = {
-    uri: resource.uri,
-    name: resource.name,
-  };
+  const body: {
+    name: string;
+    uri?: string;
+    uriTemplate?: string;
+    description?: string;
+    mimeType?: string;
+  } = { name: resource.name };
+  if (resource.uri) body.uri = resource.uri;
+  if (resource.uriTemplate) body.uriTemplate = resource.uriTemplate;
   if (resource.description) body.description = resource.description;
   if (resource.mimeType) body.mimeType = resource.mimeType;
   return `${JSON.stringify(body, null, 2)}\n`;
