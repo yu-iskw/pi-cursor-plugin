@@ -217,7 +217,12 @@ export function globMatches(glob: string, filePath: string): boolean {
 
 function patternMatches(pattern: string, filePath: string): boolean {
   if (!pattern.includes('/') && matchParts([pattern], [basename(filePath)])) return true;
-  return matchParts(pattern.split('/'), filePath.split('/'));
+  const parts = pattern.split('/').filter((segment) => segment.length > 0);
+  const segments = filePath.split('/').filter((segment) => segment.length > 0);
+  for (let index = 0; index < segments.length; index += 1) {
+    if (matchParts(parts, segments.slice(index))) return true;
+  }
+  return false;
 }
 
 function expandBraces(pattern: string): string[] {
@@ -288,7 +293,9 @@ const FILE_TOOLS = new Set(['read', 'edit', 'write', 'grep']);
 export function toolPaths(toolName: string, input: unknown): string[] {
   if (!FILE_TOOLS.has(toolName) || !input || typeof input !== 'object') return [];
   const path: unknown = Reflect.get(input, 'path');
-  return typeof path === 'string' && path.trim() ? [path.trim()] : [];
+  const filePath: unknown = Reflect.get(input, 'file_path');
+  const value = typeof path === 'string' && path.trim() ? path : filePath;
+  return typeof value === 'string' && value.trim() ? [value.trim()] : [];
 }
 
 export function pathsInText(text: string): string[] {

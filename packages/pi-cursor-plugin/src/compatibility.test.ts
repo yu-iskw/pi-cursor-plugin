@@ -875,6 +875,11 @@ describe('pstack review follow-ups', () => {
       expect(globMatches('*.ts', 'src/app.tsx')).toBe(false);
       expect(globMatches('{src,lib}/**/*.ts', 'lib/app.ts')).toBe(true);
       expect(globMatches('src/*.ts', 'src/nested/app.ts')).toBe(false);
+      expect(globMatches('src/**/*.ts', '/workspace/src/nested/app.ts')).toBe(true);
+      expect(globMatches('src/*.ts', '/workspace/src/nested/app.ts')).toBe(false);
+      expect(toolPaths('read', { file_path: '/workspace/src/app.ts' })).toEqual([
+        '/workspace/src/app.ts',
+      ]);
     } finally {
       rmSync(home, { recursive: true, force: true });
     }
