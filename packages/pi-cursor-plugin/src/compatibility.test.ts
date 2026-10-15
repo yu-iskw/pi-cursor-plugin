@@ -14,7 +14,7 @@ import {
   skillInvocation,
   toolPaths,
 } from './catalog.js';
-import { cloudReadiness, githubRepoUrl, wantsCloud } from './cloud-task.js';
+import { cloudReadiness, githubRepoUrl, resolvedCloudModel, wantsCloud } from './cloud-task.js';
 import { dispatchCursorPlugin } from './commands.js';
 import {
   applyTodos,
@@ -31,6 +31,7 @@ import {
   modelFamily,
   modelRejection,
   parseModelList,
+  parentModelArg,
   planTask,
   rejectedModelMessage,
   runSubagent,
@@ -358,6 +359,15 @@ describe('pstack compatibility', () => {
     expect(rejectedModelMessage('grok-4.7-xhigh-fast', ['grok-4.7-high'])).toContain(
       'Closest grok: grok-4.7-high',
     );
+    expect(parentModelArg({ id: 'grok-4.7', provider: 'cursor' }, 'xhigh')).toBe(
+      'cursor/grok-4.7:xhigh',
+    );
+    expect(parentModelArg({ id: 'grok-4.7', provider: 'cursor' }, 'off')).toBe('cursor/grok-4.7');
+    expect(parentModelArg(undefined, 'high')).toBeUndefined();
+    expect(resolvedCloudModel('auto', 'grok-4.7-xhigh')).toBe('grok-4.7-xhigh');
+    expect(resolvedCloudModel('claude-opus-5-5-xhigh', 'grok-4.7-xhigh')).toBe(
+      'claude-opus-5-5-xhigh',
+    );
     expect(modelRejection('auto', ['grok-4.7-high'])).toBeUndefined();
     expect(modelRejection('grok-4.7-xhigh-fast', [])).toBeUndefined();
     expect(modelRejection('grok-4.7-xhigh-fast', ['grok-4.7-high'])).toContain('grok-4.7-high');
@@ -486,6 +496,30 @@ describe('pstack compatibility', () => {
       expect(parsed.argv).toContain('--no-mcp');
       expect(parsed.argv).toContain('read,grep,find,ls');
       expect(parsed.stdin).toContain('Parent-provided poteto-mode SKILL.md path:');
+      const inherited = await task.execute(
+        'inherit',
+        {
+          prompt: 'inspect the catalog',
+          description: 'inherit parent',
+          subagent_type: 'generalPurpose',
+          model: 'inherit-parent',
+          readonly: true,
+        },
+        undefined,
+        undefined,
+        {
+          cwd: home,
+          hasUI: false,
+          model: { id: 'grok-4.7', provider: 'cursor' },
+          thinkingLevel: 'xhigh',
+        } as ExtensionToolContext,
+      );
+      const inheritedBody = inherited.content.map((part) => part.text).join('\n');
+      const inheritedArgs = JSON.parse(inheritedBody.slice(inheritedBody.indexOf('{'))) as {
+        argv: string[];
+      };
+      expect(inheritedArgs.argv).toContain('--model');
+      expect(inheritedArgs.argv).toContain('cursor/grok-4.7:xhigh');
     } finally {
       if (previousKey === undefined) delete process.env.CURSOR_API_KEY;
       else process.env.CURSOR_API_KEY = previousKey;
@@ -504,6 +538,7 @@ interface RegisteredTool {
       prompt: string;
       description: string;
       subagent_type: string;
+      model?: string;
       readonly?: boolean;
       run_in_background?: boolean;
       environment?: string;

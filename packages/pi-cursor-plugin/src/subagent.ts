@@ -45,6 +45,7 @@ export interface TaskRequest {
   resume: boolean;
   environment?: string;
   cloudBaseBranch?: string;
+  parentModel?: string;
 }
 
 export interface SubagentLaunch {
@@ -65,6 +66,20 @@ export interface SubagentOutput {
 
 function inheritedModel(model: string | undefined): boolean {
   return model === undefined || model.trim() === '' || INHERITED_MODELS.has(model.trim());
+}
+
+const THINKING_LEVELS = new Set(['minimal', 'low', 'medium', 'high', 'xhigh', 'max']);
+
+export function parentModelArg(
+  model: { id: string; provider?: string } | undefined,
+  thinkingLevel?: string,
+): string | undefined {
+  const id = model?.id.trim();
+  if (!id) return undefined;
+  const provider = model?.provider?.trim();
+  const slug = provider ? `${provider}/${id}` : id;
+  if (!thinkingLevel || !THINKING_LEVELS.has(thinkingLevel)) return slug;
+  return `${slug}:${thinkingLevel}`;
 }
 
 function validateTask(request: TaskRequest): string | undefined {
@@ -247,8 +262,9 @@ function resumeError(request: TaskRequest): string | undefined {
 
 function launchArgs(request: TaskRequest): string[] {
   const args = ['--print', '--session-id', request.sessionId, '--session-dir', request.sessionDir];
-  const model = request.model?.trim();
-  if (model && !inheritedModel(model)) args.push('--model', model);
+  const requested = request.model?.trim();
+  const model = requested && !inheritedModel(requested) ? requested : request.parentModel?.trim();
+  if (model) args.push('--model', model);
   if (request.readonly) args.push('--no-mcp', '--tools', READONLY_TOOLS);
   return args;
 }

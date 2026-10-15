@@ -12,6 +12,7 @@ export interface CloudTaskInput {
   environment?: string;
   baseBranch?: string;
   resumeId?: string;
+  parentModelId?: string;
 }
 
 export interface CloudTaskStart {
@@ -92,10 +93,22 @@ function brief(input: CloudTaskInput): string {
   return `You are read-only. Do not edit files, commit, or open a pull request.\n\n${input.prompt}`;
 }
 
-function cloudModel(model: string | undefined): { id: string } | undefined {
+export function resolvedCloudModel(
+  model: string | undefined,
+  parentId: string | undefined,
+): string | undefined {
   const value = model?.trim();
-  if (!value || value === 'auto' || value === 'inherit-parent') return undefined;
-  return { id: value };
+  if (value && value !== 'auto' && value !== 'inherit-parent') return value;
+  const parent = parentId?.trim();
+  return parent || undefined;
+}
+
+function cloudModel(
+  model: string | undefined,
+  parentId: string | undefined,
+): { id: string } | undefined {
+  const id = resolvedCloudModel(model, parentId);
+  return id ? { id } : undefined;
 }
 
 async function modelHint(slug: string | undefined, apiKey: string, error: unknown): Promise<Error> {
@@ -149,7 +162,7 @@ export async function startCloudTask(input: CloudTaskInput): Promise<CloudTaskSt
     throw new Error('Cursor cloud Task is missing its API key or repository.');
   const options = {
     apiKey,
-    model: cloudModel(input.model),
+    model: cloudModel(input.model, input.parentModelId),
     cloud: {
       repos: [{ url: repoUrl, startingRef: startingRef(input.cwd, input.baseBranch) }],
       autoCreatePR: !input.readonly,

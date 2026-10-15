@@ -18,6 +18,7 @@ import {
   currentTaskDepth,
   listInstalledModels,
   modelRejection,
+  parentModelArg,
   planTask,
   runSubagent,
   shouldBackground,
@@ -266,6 +267,7 @@ async function executeTask(
 ): Promise<AgentToolResult<ToolDetails>> {
   const catalog = loadCatalog(runtime.home);
   const resume = params.resume?.trim() ?? '';
+  const parentModel = parentModelArg(ctx.model, ctx.thinkingLevel);
   if (
     params.environment === 'local' &&
     (params.cloud_base_branch?.trim() || resume.startsWith('bc-'))
@@ -273,7 +275,7 @@ async function executeTask(
     throw new Error('cloud_base_branch and cloud agent ids apply to environment "cloud".');
   }
   if (wantsCloud(params.environment, params.cloud_base_branch, resume)) {
-    return runCloud(params, catalog.agents, ctx.cwd, runtime);
+    return runCloud(params, catalog.agents, ctx.cwd, ctx.model?.id, runtime);
   }
   const rejectedModel = modelRejection(params.model, await listInstalledModels(params.model));
   if (rejectedModel) throw new Error(rejectedModel);
@@ -293,6 +295,7 @@ async function executeTask(
       resume: resume.length > 0,
       environment: params.environment,
       cloudBaseBranch: params.cloud_base_branch,
+      parentModel,
     },
     catalog.agents,
     catalog.skills,
@@ -322,6 +325,7 @@ async function runCloud(
   },
   agents: readonly AgentRecord[],
   cwd: string,
+  parentModelId: string | undefined,
   runtime: TaskRuntime,
 ): Promise<AgentToolResult<ToolDetails>> {
   const resume = params.resume?.trim() ?? '';
@@ -334,6 +338,7 @@ async function runCloud(
     environment: params.environment,
     baseBranch: params.cloud_base_branch,
     resumeId: resume.startsWith('bc-') ? resume : undefined,
+    parentModelId,
   });
   const background = shouldBackground(params.run_in_background, agent?.isBackground === true);
   if (background) {
